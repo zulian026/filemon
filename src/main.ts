@@ -221,8 +221,11 @@ function renderTable(): void {
     tr.dataset.path = e.path;
     if (state.selection.has(e.path)) tr.classList.add("is-selected");
     const nameTd = document.createElement("td");
-    nameTd.className = "cell-name";
-    nameTd.innerHTML = `${iconSvg(iconFor(e), "icon file-icon")}<span class="file-name">${escapeHtml(e.name)}</span>`;
+    // NB: .cell-name is display:flex — it must wrap the content in a div.
+    // Putting it on the td itself turns the cell into a flex box, and
+    // WebKitGTK then drops that cell's collapsed bottom border, so the row
+    // dividers looked cut under the Name column.
+    nameTd.innerHTML = `<div class="cell-name">${iconSvg(iconFor(e), "icon file-icon")}<span class="file-name">${escapeHtml(e.name)}</span></div>`;
     const modTd = document.createElement("td");
     modTd.textContent = fmtDate(e.modified);
     const typeTd = document.createElement("td");

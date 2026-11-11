@@ -19,6 +19,7 @@ static const char *g_mode = "read";
 
 static void on_load(WebKitWebView *wv, WebKitLoadEvent ev, gpointer data) {
   if (ev != WEBKIT_LOAD_FINISHED) return;
+  if (!g_strcmp0(g_mode, "hold")) return; /* keep window open for screenshots */
   char *js = g_strdup_printf(
     "(function(){"
     " var out={};"
