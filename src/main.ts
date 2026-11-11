@@ -34,17 +34,62 @@ type Properties = {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
+type Tab = {
+  id: number;
+  path: string;
+  history: string[];
+  histIndex: number;
+  view: "details" | "icons";
+  sortKey: "name" | "size" | "modified" | "type";
+  sortDir: number;
+};
+
 const state = {
-  path: "",
-  history: [] as string[],
-  histIndex: -1,
+  tabs: [] as Tab[],
+  activeTab: 0,
+  nextTabId: 1,
+  /* Path, history, view and sort live on the active tab. These accessors
+     delegate to it, so the rest of the code keeps using state.path etc. */
+  get path(): string {
+    return state.tabs[state.activeTab]?.path ?? "";
+  },
+  set path(v: string) {
+    if (state.tabs[state.activeTab]) state.tabs[state.activeTab].path = v;
+  },
+  get history(): string[] {
+    return state.tabs[state.activeTab]?.history ?? [];
+  },
+  set history(v: string[]) {
+    if (state.tabs[state.activeTab]) state.tabs[state.activeTab].history = v;
+  },
+  get histIndex(): number {
+    return state.tabs[state.activeTab]?.histIndex ?? -1;
+  },
+  set histIndex(v: number) {
+    if (state.tabs[state.activeTab]) state.tabs[state.activeTab].histIndex = v;
+  },
+  get view(): "details" | "icons" {
+    return state.tabs[state.activeTab]?.view ?? "details";
+  },
+  set view(v: "details" | "icons") {
+    if (state.tabs[state.activeTab]) state.tabs[state.activeTab].view = v;
+  },
+  get sortKey(): "name" | "size" | "modified" | "type" {
+    return state.tabs[state.activeTab]?.sortKey ?? "name";
+  },
+  set sortKey(v: "name" | "size" | "modified" | "type") {
+    if (state.tabs[state.activeTab]) state.tabs[state.activeTab].sortKey = v;
+  },
+  get sortDir(): number {
+    return state.tabs[state.activeTab]?.sortDir ?? 1;
+  },
+  set sortDir(v: number) {
+    if (state.tabs[state.activeTab]) state.tabs[state.activeTab].sortDir = v;
+  },
   entries: [] as Entry[],
   filtered: [] as Entry[],
   selection: new Set<string>(),
   clipboard: null as { mode: "copy" | "cut"; paths: string[] } | null,
-  view: (localStorage.getItem("filemon-view") as "details" | "icons") || "details",
-  sortKey: (localStorage.getItem("filemon-sort") as "name" | "size" | "modified" | "type") || "name",
-  sortDir: 1,
   showHidden: localStorage.getItem("filemon-hidden") === "1",
   searching: false,
   searchQuery: "",
@@ -183,6 +228,162 @@ function updateNavButtons(): void {
   ($("btn-up") as HTMLButtonElement).disabled = parentOf(state.path) === null;
 }
 
+/* ---- Tabs ---- */
+
+function cur(): Tab {
+  return state.tabs[state.activeTab];
+}
+
+function tabTitle(t: Tab): string {
+  if (t.path === "/") return "This PC";
+  const name = t.path.replace(/\/+$/, "").split("/").pop() ?? "";
+  return name || "This PC";
+}
+
+function saveTabs(): void {
+  try {
+    localStorage.setItem(
+      "filemon-tabs",
+      JSON.stringify(
+        state.tabs.map((t) => ({ path: t.path, view: t.view, sortKey: t.sortKey, sortDir: t.sortDir })),
+      ),
+    );
+    localStorage.setItem("filemon-active-tab", String(state.activeTab));
+  } catch {
+    /* storage unavailable — tabs still work for this session */
+  }
+}
+
+function restoreTabs(home: string): void {
+  let saved: { path: string; view: Tab["view"]; sortKey: Tab["sortKey"]; sortDir: number }[] = [];
+  try {
+    const raw = JSON.parse(localStorage.getItem("filemon-tabs") ?? "[]");
+    if (Array.isArray(raw)) saved = raw;
+  } catch {
+    saved = [];
+  }
+  // First run (or pre-tabs install): one tab at Home, keeping the stored
+  // global view/sort as its defaults.
+  const view = (localStorage.getItem("filemon-view") as Tab["view"]) || "details";
+  const sortKey = (localStorage.getItem("filemon-sort") as Tab["sortKey"]) || "name";
+  const list = saved.filter((t) => typeof t?.path === "string" && t.path.startsWith("/"));
+  const seeds = list.length > 0 ? list : [{ path: home, view, sortKey, sortDir: 1 }];
+  state.tabs = seeds.map((t) => ({
+    id: state.nextTabId++,
+    path: t.path,
+    history: [t.path],
+    histIndex: 0,
+    view: t.view === "icons" ? "icons" : "details",
+    sortKey: (["name", "size", "modified", "type"].includes(t.sortKey) ? t.sortKey : "name") as Tab["sortKey"],
+    sortDir: t.sortDir === -1 ? -1 : 1,
+  }));
+  const active = Number(localStorage.getItem("filemon-active-tab") ?? "0");
+  state.activeTab = active >= 0 && active < state.tabs.length ? active : 0;
+}
+
+function renderTabs(): void {
+  const bar = $("tab-bar");
+  bar.innerHTML = "";
+  state.tabs.forEach((t, i) => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "tab" + (i === state.activeTab ? " is-active" : "");
+    el.setAttribute("role", "tab");
+    el.setAttribute("aria-selected", String(i === state.activeTab));
+    el.title = t.path;
+    const label = document.createElement("span");
+    label.className = "tab-label";
+    label.textContent = tabTitle(t);
+    const x = document.createElement("span");
+    x.className = "tab-close";
+    x.textContent = "×";
+    x.title = "Close tab (Ctrl+W)";
+    x.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      void closeTab(i);
+    });
+    el.append(label, x);
+    el.addEventListener("click", () => void switchTab(i));
+    el.addEventListener("auxclick", (ev) => {
+      if (ev.button === 1) {
+        ev.preventDefault();
+        void closeTab(i);
+      }
+    });
+    // Dropping files onto a tab moves/copies them into that tab's folder.
+    attachDropTarget(el, () => t.path);
+    bar.appendChild(el);
+  });
+  const plus = document.createElement("button");
+  plus.type = "button";
+  plus.className = "tab-new";
+  plus.textContent = "+";
+  plus.title = "New tab (Ctrl+T)";
+  plus.setAttribute("aria-label", "New tab");
+  plus.addEventListener("click", () => void newTab());
+  bar.appendChild(plus);
+  saveTabs();
+}
+
+async function switchTab(i: number): Promise<void> {
+  if (i === state.activeTab || i < 0 || i >= state.tabs.length) return;
+  state.activeTab = i;
+  state.selection.clear();
+  state.searching = false;
+  state.searchQuery = "";
+  ($("search") as HTMLInputElement).value = "";
+  ($("sort-key") as HTMLSelectElement).value = state.sortKey;
+  renderTabs();
+  await loadDir();
+  updateNavButtons();
+}
+
+/** New tab at `path` (default: the current folder), inheriting view/sort. */
+function newTab(path = state.path): void {
+  const src = cur();
+  state.tabs.push({
+    id: state.nextTabId++,
+    path,
+    history: [path],
+    histIndex: 0,
+    view: src.view,
+    sortKey: src.sortKey,
+    sortDir: src.sortDir,
+  });
+  void switchTab(state.tabs.length - 1);
+}
+
+async function closeTab(i: number): Promise<void> {
+  if (state.tabs.length === 1) {
+    // Last tab: replace it with a fresh one at Home instead of closing the window.
+    const t = state.tabs[0];
+    t.path = state.homeDir;
+    t.history = [state.homeDir];
+    t.histIndex = 0;
+    renderTabs();
+    await loadDir();
+    updateNavButtons();
+    return;
+  }
+  state.tabs.splice(i, 1);
+  if (i < state.activeTab) {
+    state.activeTab--;
+    renderTabs();
+  } else if (i === state.activeTab) {
+    state.activeTab = Math.min(i, state.tabs.length - 1);
+    state.selection.clear();
+    renderTabs();
+    await loadDir();
+    updateNavButtons();
+  } else {
+    renderTabs();
+  }
+}
+
+function openInNewTab(path: string): void {
+  newTab(path);
+}
+
 function applyFilterSort(): void {
   let list = state.entries;
   if (!state.showHidden) list = list.filter((e) => !e.hidden);
@@ -255,7 +456,16 @@ function renderTable(): void {
     sizeTd.textContent = e.is_dir ? "—" : fmtSize(e.size ?? 0);
     tr.append(nameTd, modTd, typeTd, sizeTd);
     tr.addEventListener("click", (ev) => onRowClick(ev, e));
-    tr.addEventListener("dblclick", () => void openEntry(e));
+    tr.addEventListener("dblclick", (ev) => {
+      if (ev.ctrlKey || ev.metaKey) void openEntry(e, true);
+      else void openEntry(e);
+    });
+    tr.addEventListener("auxclick", (ev) => {
+      if (ev.button === 1 && e.is_dir) {
+        ev.preventDefault();
+        void openEntry(e, true);
+      }
+    });
     tr.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
       if (!state.selection.has(e.path)) {
@@ -283,7 +493,16 @@ function renderGrid(): void {
     if (e.is_dir) attachDropTarget(tile, () => e.path);
     tile.innerHTML = `${iconSvg(iconFor(e), "icon tile-icon")}<span class="tile-name">${escapeHtml(e.name)}</span>`;
     tile.addEventListener("click", (ev) => onRowClick(ev, e));
-    tile.addEventListener("dblclick", () => void openEntry(e));
+    tile.addEventListener("dblclick", (ev) => {
+      if (ev.ctrlKey || ev.metaKey) void openEntry(e, true);
+      else void openEntry(e);
+    });
+    tile.addEventListener("auxclick", (ev) => {
+      if (ev.button === 1 && e.is_dir) {
+        ev.preventDefault();
+        void openEntry(e, true);
+      }
+    });
     tile.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
       if (!state.selection.has(e.path)) {
@@ -488,6 +707,7 @@ function renderStatus(): void {
 function render(): void {
   applyFilterSort();
   renderCrumbs();
+  renderTabs();
   renderTable();
   renderGrid();
   renderStatus();
@@ -540,9 +760,10 @@ function onRowClick(ev: MouseEvent, e: Entry): void {
   renderSelection();
 }
 
-async function openEntry(e: Entry): Promise<void> {
+async function openEntry(e: Entry, newTab = false): Promise<void> {
   if (e.is_dir) {
-    await navigate(e.path);
+    if (newTab) openInNewTab(e.path);
+    else await navigate(e.path);
     return;
   }
   try {
@@ -771,6 +992,7 @@ function showContextMenu(x: number, y: number, target: Entry | null): void {
   const items: { label: string; disabled?: boolean; action: () => void | Promise<void> }[] = [];
   if (target) {
     items.push({ label: "Open", action: () => void openEntry(target) });
+    if (target.is_dir) items.push({ label: "Open in new tab", action: () => void openInNewTab(target.path) });
     items.push({ label: "Copy", action: () => void doCopyCut("copy") });
     items.push({ label: "Cut", action: () => void doCopyCut("cut") });
     items.push({ label: "Compress to ZIP", action: () => void doCompress() });
@@ -887,6 +1109,7 @@ async function init(): Promise<void> {
   state.homeDir = home;
   state.drives = await invoke<Drive[]>("get_drives");
   renderSidebar();
+  restoreTabs(home);
 
   ($("sort-key") as HTMLSelectElement).value = state.sortKey;
   ($("show-hidden") as HTMLInputElement).checked = state.showHidden;
@@ -956,18 +1179,18 @@ async function init(): Promise<void> {
   });
   ($("sort-key") as HTMLSelectElement).addEventListener("change", (ev) => {
     state.sortKey = (ev.target as HTMLSelectElement).value as typeof state.sortKey;
-    localStorage.setItem("filemon-sort", state.sortKey);
+    saveTabs();
     render();
   });
   $("view-details").addEventListener("click", () => {
     state.view = "details";
-    localStorage.setItem("filemon-view", "details");
+    saveTabs();
     render();
     showState(state.filtered.length === 0 ? "empty" : "full");
   });
   $("view-icons").addEventListener("click", () => {
     state.view = "icons";
-    localStorage.setItem("filemon-view", "icons");
+    saveTabs();
     render();
     showState(state.filtered.length === 0 ? "empty" : "full");
   });
@@ -980,7 +1203,7 @@ async function init(): Promise<void> {
         state.sortDir = 1;
       }
       ($("sort-key") as HTMLSelectElement).value = key;
-      localStorage.setItem("filemon-sort", key);
+      saveTabs();
       render();
     });
   });
@@ -1066,6 +1289,29 @@ async function init(): Promise<void> {
   document.addEventListener("keydown", (ev) => {
     const inField = (ev.target as HTMLElement).closest("input, select, textarea, dialog");
     if (ev.key === "Escape") hideContextMenu();
+    // Tab shortcuts work even from the search box.
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "t") {
+      ev.preventDefault();
+      newTab();
+      return;
+    }
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "w") {
+      ev.preventDefault();
+      void closeTab(state.activeTab);
+      return;
+    }
+    if (ev.ctrlKey && ev.key === "Tab") {
+      ev.preventDefault();
+      void switchTab((state.activeTab + (ev.shiftKey ? state.tabs.length - 1 : 1)) % state.tabs.length);
+      return;
+    }
+    if (ev.ctrlKey && (ev.key === "PageUp" || ev.key === "PageDown")) {
+      ev.preventDefault();
+      void switchTab(
+        (state.activeTab + (ev.key === "PageUp" ? state.tabs.length - 1 : 1)) % state.tabs.length,
+      );
+      return;
+    }
     if (inField) return;
     if (ev.altKey && ev.key === "ArrowLeft") {
       ev.preventDefault();
@@ -1117,7 +1363,15 @@ async function init(): Promise<void> {
     });
   }
 
-  await navigate(home);
+  // Restore the active tab's folder; fall back to Home if it no longer exists.
+  await navigate(state.path, false);
+  if (!($("error") as HTMLElement).hidden) {
+    state.path = home;
+    state.history = [home];
+    state.histIndex = 0;
+    await loadDir();
+    updateNavButtons();
+  }
 }
 
 void init();
