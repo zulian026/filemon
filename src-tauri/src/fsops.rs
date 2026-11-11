@@ -94,8 +94,10 @@ pub fn list_dir(path: &Path) -> Result<Vec<Entry>, String> {
 /// are dropped, and the label is the mount point: sysinfo's Linux disk name
 /// is the raw device path, which repeats for every mount of one disk.
 pub fn drives() -> Vec<Drive> {
-    use sysinfo::{DiskRefreshKind, Disks};
-    let disks = Disks::new_with_refreshed_list_specifics(DiskRefreshKind::nothing());
+    use sysinfo::Disks;
+    // Refresh the list AND the sizes: with DiskRefreshKind::nothing() the
+    // mounts show up but total/free stay 0, which the filter then drops.
+    let disks = Disks::new_with_refreshed_list();
     let mut out: Vec<Drive> = disks
         .iter()
         .filter(|d| {
@@ -545,5 +547,14 @@ mod tests {
             url_encode_path(Path::new("/home/zyan/My File.txt")),
             "/home/zyan/My%20File.txt"
         );
+    }
+
+    #[test]
+    fn drives_have_sizes() {
+        // Guards the DiskRefreshKind::nothing() trap: mounts listed but
+        // total/free left at 0, which the filter then drops entirely.
+        let d = drives();
+        assert!(!d.is_empty(), "no drives listed");
+        assert!(d.iter().all(|x| x.total > 0), "a drive reports 0 total");
     }
 }
