@@ -1,0 +1,54 @@
+<script>
+window.__invokes = [];
+window.__callbacks = [];
+window.__eventHandlers = {};
+window.__transferCancelled = false;
+window.__TAURI_INTERNALS__ = {
+  invoke: async function (cmd, args) {
+    window.__invokes.push([cmd, args || {}]);
+    if (cmd === "get_home") return "/home/zyan";
+    if (cmd === "get_drives") return [];
+    if (cmd === "list_dir") return [
+      { name: "Docs", path: "/home/zyan/Docs", is_dir: true, is_symlink: false, size: null, modified: 1790000000, extension: null, hidden: false },
+      { name: "Pics", path: "/home/zyan/Pics", is_dir: true, is_symlink: false, size: null, modified: 1790000000, extension: null, hidden: false },
+      { name: "notes.txt", path: "/home/zyan/notes.txt", is_dir: false, is_symlink: false, size: 120, modified: 1790000000, extension: "txt", hidden: false },
+      { name: "img.png", path: "/home/zyan/img.png", is_dir: false, is_symlink: false, size: 6400, modified: 1790000000, extension: "png", hidden: false },
+      { name: "tree.zip", path: "/home/zyan/tree.zip", is_dir: false, is_symlink: false, size: 900, modified: 1790000000, extension: "zip", hidden: false }
+    ];
+    if (cmd === "move_paths" || cmd === "copy_paths") return 1;
+    if (cmd === "compress_paths") return "notes.txt.zip";
+    if (cmd === "extract_archive") return "tree";
+    if (cmd === "rename_path") {
+      if (args && typeof args.new_name === "string" && args.new_name.includes("/")) throw new Error("Name cannot contain /");
+      return null;
+    }
+    if (cmd === "new_folder" || cmd === "new_file") {
+      if (args && typeof args.name === "string" && args.name.includes("/")) throw new Error("Name cannot contain /");
+      return null;
+    }
+    if (cmd === "delete_paths") return 1;
+    if (cmd === "list_trash") return [
+      { name: "notes.txt", path: "/home/zyan/.local/share/Trash/files/notes.txt", is_dir: false, is_symlink: false, size: 120, modified: 1793000000, extension: "txt", hidden: false, original_path: "/home/zyan/notes.txt" },
+      { name: "tree", path: "/home/zyan/.local/share/Trash/files/tree", is_dir: true, is_symlink: false, size: 1, modified: 1792000000, extension: null, hidden: false, original_path: "/home/zyan/tree" }
+    ];
+    if (cmd === "restore_trash") return 1;
+    if (cmd === "delete_trash") return 1;
+    if (cmd === "empty_trash") return 2;
+    if (cmd === "start_transfer") {
+      // Slow transfer: resolves after 800 ms so the panel + cancel can be tested.
+      return new Promise((resolve) => setTimeout(() => {
+        resolve(window.__transferCancelled ? { done: 0, cancelled: true } : { done: 1, cancelled: false });
+      }, 800));
+    }
+    if (cmd === "cancel_transfer") { window.__transferCancelled = true; return null; }
+    if (cmd === "plugin:event|listen") {
+      // listen() passes the handler as a numeric callback id from transformCallback.
+      if (args && args.event && typeof args.handler === "number") window.__eventHandlers[args.event] = window.__callbacks[args.handler - 1];
+      return 1;
+    }
+    if (cmd === "plugin:event|unlisten") return null;
+    return null;
+  },
+  transformCallback: function (cb) { window.__callbacks.push(cb); return window.__callbacks.length; }
+};
+</script>

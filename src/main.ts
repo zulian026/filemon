@@ -549,7 +549,7 @@ function renderTable(): void {
     // Putting it on the td itself turns the cell into a flex box, and
     // WebKitGTK then drops that cell's collapsed bottom border, so the row
     // dividers looked cut under the Name column.
-    nameTd.innerHTML = `<div class="cell-name">${iconSvg(iconFor(e), "icon file-icon")}<div class="cell-name-text"><span class="file-name">${escapeHtml(e.name)}</span>${state.isTrash && e.original_path ? `<span class="file-sub" title="${escapeHtml(e.original_path)}">${escapeHtml(e.original_path)}</span>` : ""}</div></div>`;
+    nameTd.innerHTML = `<div class="cell-name">${iconSvg(iconFor(e), "icon file-icon" + (e.is_dir ? " is-dir" : ""))}<div class="cell-name-text"><span class="file-name">${escapeHtml(e.name)}</span>${state.isTrash && e.original_path ? `<span class="file-sub" title="${escapeHtml(e.original_path)}">${escapeHtml(e.original_path)}</span>` : ""}</div></div>`;
     const modTd = document.createElement("td");
     modTd.textContent = fmtDate(e.modified);
     const typeTd = document.createElement("td");
@@ -594,7 +594,7 @@ function renderGrid(): void {
     tile.addEventListener("dragstart", (ev) => onDragStart(ev, e, tile));
     tile.addEventListener("dragend", () => onDragEnd(tile));
     if (e.is_dir) attachDropTarget(tile, () => e.path);
-    tile.innerHTML = `${iconSvg(iconFor(e), "icon tile-icon")}<span class="tile-name">${escapeHtml(e.name)}</span>`;
+    tile.innerHTML = `${iconSvg(iconFor(e), "icon tile-icon" + (e.is_dir ? " is-dir" : ""))}<span class="tile-name">${escapeHtml(e.name)}</span>`;
     if (state.isTrash && e.original_path) tile.title = e.original_path;
     tile.addEventListener("click", (ev) => onRowClick(ev, e));
     tile.addEventListener("dblclick", (ev) => {
