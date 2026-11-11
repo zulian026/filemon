@@ -7,11 +7,39 @@
     <meta name="description" content="FileMon is a Windows Explorer-style file manager for Linux: browse, search, copy, move, rename and organise files." />
     <link rel="stylesheet" href="src/styles.css" />
     <script>
-      /* Apply the saved theme before first paint so the window never
-         flashes the wrong theme. Default is dark. */
+      /* Theme, applied before first paint so the window never flashes the
+         wrong theme. Default is dark.
+         Tokens here must match src/tokens.css :root[data-theme="light"].
+         They are set as inline custom properties as well as the data-theme
+         attribute: WebKitGTK does not reliably restyle on the attribute
+         change alone (label flips, colours stay dark), inline properties
+         always win. */
+      window.__setTheme = function (t) {
+        var light = t === "light";
+        document.documentElement.dataset.theme = light ? "light" : "dark";
+        var s = document.documentElement.style;
+        var tokens = {
+          "color-scheme": light ? "light" : "",
+          "--color-paper": light ? "#fafafa" : "",
+          "--color-paper-2": light ? "#ffffff" : "",
+          "--color-paper-3": light ? "#f0f0f0" : "",
+          "--color-ink": light ? "#111111" : "",
+          "--color-ink-2": light ? "#333333" : "",
+          "--color-muted": light ? "#666666" : "",
+          "--color-muted-2": light ? "#8a8a8a" : "",
+          "--color-rule": light ? "#e0e0e0" : "",
+          "--color-rule-2": light ? "#eeeeee" : "",
+          "--color-accent-2": light ? "#2563eb" : "",
+          "--color-focus": light ? "#4d7c0f" : ""
+        };
+        for (var k in tokens) {
+          if (tokens[k]) s.setProperty(k, tokens[k]); else s.removeProperty(k);
+        }
+        try { localStorage.setItem("filemon-theme", light ? "light" : "dark"); } catch (e) {}
+      };
       try {
-        var t = localStorage.getItem("filemon-theme");
-        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+        var saved = localStorage.getItem("filemon-theme");
+        if (saved === "light" || saved === "dark") window.__setTheme(saved);
       } catch (e) {}
     </script>
   </head>

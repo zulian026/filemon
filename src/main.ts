@@ -787,10 +787,12 @@ async function init(): Promise<void> {
     themeBtn.textContent = document.documentElement.dataset.theme === "light" ? "Dark mode" : "Light mode";
   };
   applyThemeLabel();
+  // Re-apply the stored theme through __setTheme so the inline custom
+  // properties match the attribute (see index.html: WebKitGTK restyle).
+  (window as any).__setTheme(document.documentElement.dataset.theme || "dark");
   themeBtn.addEventListener("click", () => {
     const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-    document.documentElement.dataset.theme = next;
-    localStorage.setItem("filemon-theme", next);
+    (window as any).__setTheme(next);
     applyThemeLabel();
   });
 
