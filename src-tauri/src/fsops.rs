@@ -19,6 +19,8 @@ pub struct Entry {
     pub modified: Option<i64>,
     pub extension: Option<String>,
     pub hidden: bool,
+    /// Trash listings only: where the item lived before it was deleted.
+    pub original_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,6 +71,7 @@ fn entry_from(path: &Path, md: &fs::Metadata) -> Entry {
         is_symlink: path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false),
         size: if is_dir { None } else { Some(md.len()) },
         modified: md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64),
+        original_path: None,
     }
 }
 
@@ -694,6 +697,160 @@ pub fn delete_paths(paths: &[PathBuf]) -> Result<usize, String> {
     Ok(done)
 }
 
+// ---- Trash browsing: list / restore / delete permanently / empty ----
+// The `_in` cores take explicit trash dirs so tests can use a temp Trash
+// instead of the real ~/.local/share/Trash; the public wrappers use trash_dirs().
+
+fn url_decode_path(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Parse a .trashinfo body into (original path, deletion epoch or None).
+fn parse_trashinfo(text: &str) -> Option<(String, Option<i64>)> {
+    let mut path: Option<String> = None;
+    let mut deleted: Option<i64> = None;
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("Path=") {
+            path = Some(url_decode_path(v.trim()));
+        } else if let Some(v) = line.strip_prefix("DeletionDate=") {
+            if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(v.trim(), "%Y-%m-%dT%H:%M:%S") {
+                use chrono::TimeZone;
+                deleted = chrono::Local
+                    .from_local_datetime(&naive)
+                    .single()
+                    .map(|d| d.timestamp());
+            }
+        }
+    }
+    path.map(|p| (p, deleted))
+}
+
+fn trash_info_for(info_dir: &Path, name: &str) -> Option<(String, Option<i64>)> {
+    let text = fs::read_to_string(info_dir.join(format!("{}.trashinfo", name))).ok()?;
+    parse_trashinfo(&text)
+}
+
+pub fn list_trash_in(files_dir: &Path, info_dir: &Path) -> Vec<Entry> {
+    let mut out = Vec::new();
+    let Ok(rd) = fs::read_dir(files_dir) else {
+        return out;
+    };
+    for item in rd.flatten() {
+        let p = item.path();
+        let Ok(md) = fs::symlink_metadata(&p) else {
+            continue;
+        };
+        let mut e = entry_from(&p, &md);
+        // Directories report None for size in entry_from; sum them for Trash.
+        if e.is_dir {
+            e.size = Some(dir_size(&p).0);
+        }
+        if let Some((orig, deleted)) = trash_info_for(info_dir, &e.name) {
+            e.original_path = Some(orig);
+            // The Date column shows when the item was deleted.
+            if deleted.is_some() {
+                e.modified = deleted;
+            }
+        }
+        out.push(e);
+    }
+    out.sort_by(|a, b| {
+        b.modified
+            .unwrap_or(0)
+            .cmp(&a.modified.unwrap_or(0))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    out
+}
+
+pub fn list_trash() -> Vec<Entry> {
+    let (files_dir, info_dir) = trash_dirs();
+    list_trash_in(&files_dir, &info_dir)
+}
+
+fn remove_trash_item(p: &Path) -> Result<(), String> {
+    let md = fs::symlink_metadata(p).map_err(|e| e.to_string())?;
+    if md.is_dir() && !md.file_type().is_symlink() {
+        fs::remove_dir_all(p).map_err(|e| e.to_string())
+    } else {
+        fs::remove_file(p).map_err(|e| e.to_string())
+    }
+}
+
+/// Move trashed items back to their original locations. A missing parent
+/// folder is recreated; a name collision at the original location gets a
+/// " (copy)" suffix (via move_paths). Items without a .trashinfo are
+/// restored to the home folder instead of being lost.
+pub fn restore_trash_in(files_dir: &Path, info_dir: &Path, paths: &[PathBuf]) -> Result<usize, String> {
+    let mut done = 0;
+    for trash_path in paths {
+        let name = trash_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or_else(|| "Bad path".to_string())?;
+        let (orig, _) = trash_info_for(info_dir, &name)
+            .map(|(p, d)| (PathBuf::from(p), d))
+            .unwrap_or_else(|| (home_dir().join(&name), None));
+        let parent = orig.parent().map(|p| p.to_path_buf()).unwrap_or_else(home_dir);
+        fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+        move_paths(std::slice::from_ref(trash_path), &parent)?;
+        let _ = fs::remove_file(info_dir.join(format!("{}.trashinfo", name)));
+        done += 1;
+    }
+    Ok(done)
+}
+
+pub fn restore_trash(paths: &[PathBuf]) -> Result<usize, String> {
+    let (files_dir, info_dir) = trash_dirs();
+    restore_trash_in(&files_dir, &info_dir, paths)
+}
+
+/// Delete trashed items permanently (bypassing the Trash) with their .trashinfo.
+pub fn delete_trash_in(files_dir: &Path, info_dir: &Path, paths: &[PathBuf]) -> Result<usize, String> {
+    let mut done = 0;
+    for trash_path in paths {
+        let name = trash_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or_else(|| "Bad path".to_string())?;
+        remove_trash_item(trash_path)?;
+        let _ = fs::remove_file(info_dir.join(format!("{}.trashinfo", name)));
+        done += 1;
+    }
+    Ok(done)
+}
+
+pub fn delete_trash(paths: &[PathBuf]) -> Result<usize, String> {
+    let (files_dir, info_dir) = trash_dirs();
+    delete_trash_in(&files_dir, &info_dir, paths)
+}
+
+pub fn empty_trash_in(files_dir: &Path, info_dir: &Path) -> Result<usize, String> {
+    let items: Vec<PathBuf> = fs::read_dir(files_dir)
+        .map(|rd| rd.flatten().map(|i| i.path()).collect())
+        .unwrap_or_default();
+    delete_trash_in(files_dir, info_dir, &items)
+}
+
+pub fn empty_trash() -> Result<usize, String> {
+    let (files_dir, info_dir) = trash_dirs();
+    empty_trash_in(&files_dir, &info_dir)
+}
+
 /// Percent-encode a path the way .trashinfo expects (keeps '/' intact).
 pub fn url_encode_path(p: &Path) -> String {
     let mut out = String::new();
@@ -930,6 +1087,114 @@ mod tests {
             url_encode_path(Path::new("/home/zyan/My File.txt")),
             "/home/zyan/My%20File.txt"
         );
+        // Round trip: the reader must decode what the writer encoded.
+        assert_eq!(
+            url_decode_path("/home/zyan/My%20File.txt"),
+            "/home/zyan/My File.txt"
+        );
+        assert_eq!(
+            parse_trashinfo("[Trash Info]\nPath=/home/zyan/My%20File.txt\nDeletionDate=2026-11-11T19:00:00\n")
+                .map(|(p, _)| p),
+            Some("/home/zyan/My File.txt".to_string())
+        );
+    }
+
+    fn seed_trash(
+        files_dir: &Path,
+        info_dir: &Path,
+        orig: &Path,
+        name: &str,
+        date: &str,
+        contents: &[u8],
+    ) {
+        fs::write(files_dir.join(name), contents).unwrap();
+        fs::write(
+            info_dir.join(format!("{}.trashinfo", name)),
+            format!(
+                "[Trash Info]\nPath={}\nDeletionDate={}\n",
+                url_encode_path(orig),
+                date
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn trash_list_restore_delete_empty() {
+        let base = std::env::temp_dir().join("filemon-test-trash");
+        let _ = fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let files_dir = base.join("Trash/files");
+        let info_dir = base.join("Trash/info");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&files_dir).unwrap();
+        fs::create_dir_all(&info_dir).unwrap();
+
+        // Two trashed items: a file with a space in its name (decode check)
+        // and a folder. The file was deleted later, so it lists first.
+        seed_trash(
+            &files_dir,
+            &info_dir,
+            &home.join("my file.txt"),
+            "my file.txt",
+            "2026-11-11T20:00:00",
+            b"hello",
+        );
+        fs::create_dir(files_dir.join("tree")).unwrap();
+        fs::write(files_dir.join("tree/a.txt"), b"a").unwrap();
+        fs::write(
+            info_dir.join("tree.trashinfo"),
+            format!(
+                "[Trash Info]\nPath={}\nDeletionDate=2026-11-11T19:00:00\n",
+                url_encode_path(&home.join("tree"))
+            ),
+        )
+        .unwrap();
+
+        let listed = list_trash_in(&files_dir, &info_dir);
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].name, "my file.txt");
+        assert_eq!(listed[0].original_path.as_deref(), Some(home.join("my file.txt").to_str().unwrap()));
+        assert!(listed[0].modified.is_some());
+        assert_eq!(listed[1].name, "tree");
+        assert!(listed[1].is_dir);
+        assert_eq!(listed[1].size, Some(1));
+
+        // Restore the file: it comes back with its content, info file gone.
+        assert_eq!(restore_trash_in(&files_dir, &info_dir, &[files_dir.join("my file.txt")]).unwrap(), 1);
+        assert_eq!(fs::read(home.join("my file.txt")).unwrap(), b"hello");
+        assert!(!info_dir.join("my file.txt.trashinfo").exists());
+        assert_eq!(list_trash_in(&files_dir, &info_dir).len(), 1);
+
+        // Restore collision: a file already sits at the original spot.
+        seed_trash(
+            &files_dir,
+            &info_dir,
+            &home.join("my file.txt"),
+            "my file.txt",
+            "2026-11-11T21:00:00",
+            b"second",
+        );
+        assert_eq!(restore_trash_in(&files_dir, &info_dir, &[files_dir.join("my file.txt")]).unwrap(), 1);
+        assert_eq!(fs::read(home.join("my file (copy).txt")).unwrap(), b"second");
+        assert_eq!(fs::read(home.join("my file.txt")).unwrap(), b"hello");
+
+        // Permanent delete, then empty the rest.
+        assert_eq!(delete_trash_in(&files_dir, &info_dir, &[files_dir.join("tree")]).unwrap(), 1);
+        assert!(!files_dir.join("tree").exists());
+        assert!(!info_dir.join("tree.trashinfo").exists());
+        assert_eq!(list_trash_in(&files_dir, &info_dir).len(), 0);
+        seed_trash(
+            &files_dir,
+            &info_dir,
+            &home.join("gone.txt"),
+            "gone.txt",
+            "2026-11-11T22:00:00",
+            b"x",
+        );
+        assert_eq!(empty_trash_in(&files_dir, &info_dir).unwrap(), 1);
+        assert_eq!(list_trash_in(&files_dir, &info_dir).len(), 0);
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -10,6 +10,7 @@ type Entry = {
   modified: number | null;
   extension: string | null;
   hidden: boolean;
+  original_path?: string | null;
 };
 
 type Drive = {
@@ -42,6 +43,7 @@ type Tab = {
   view: "details" | "icons";
   sortKey: "name" | "size" | "modified" | "type";
   sortDir: number;
+  isTrash: boolean;
 };
 
 const state = {
@@ -85,6 +87,12 @@ const state = {
   },
   set sortDir(v: number) {
     if (state.tabs[state.activeTab]) state.tabs[state.activeTab].sortDir = v;
+  },
+  get isTrash(): boolean {
+    return state.tabs[state.activeTab]?.isTrash ?? false;
+  },
+  set isTrash(v: boolean) {
+    if (state.tabs[state.activeTab]) state.tabs[state.activeTab].isTrash = v;
   },
   entries: [] as Entry[],
   filtered: [] as Entry[],
@@ -159,6 +167,7 @@ const ICONS: Record<string, string> = {
   info: '<circle cx="8" cy="8" r="6.5"/><path d="M8 7.5V11M8 4.8v.3"/>',
   list: '<path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.5M2.5 8h.5M2.5 12h.5"/>',
   grid: '<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="0.5"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="0.5"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="0.5"/><rect x="9" y="9" width="4.5" height="4.5" rx="0.5"/>',
+  undo: '<path d="M6.5 3.5L3 7l3.5 3.5"/><path d="M3 7h6a4 4 0 0 1 0 8H7"/>',
 };
 
 function iconFor(e: Entry): string {
@@ -208,6 +217,7 @@ function driveFor(path: string): Drive | null {
 }
 
 async function navigate(path: string, push = true): Promise<void> {
+  state.isTrash = false;
   if (push) {
     state.history = state.history.slice(0, state.histIndex + 1);
     state.history.push(path);
@@ -223,6 +233,12 @@ async function navigate(path: string, push = true): Promise<void> {
 }
 
 function updateNavButtons(): void {
+  if (state.isTrash) {
+    ($("btn-back") as HTMLButtonElement).disabled = true;
+    ($("btn-forward") as HTMLButtonElement).disabled = true;
+    ($("btn-up") as HTMLButtonElement).disabled = true;
+    return;
+  }
   ($("btn-back") as HTMLButtonElement).disabled = state.histIndex <= 0;
   ($("btn-forward") as HTMLButtonElement).disabled = state.histIndex >= state.history.length - 1;
   ($("btn-up") as HTMLButtonElement).disabled = parentOf(state.path) === null;
@@ -235,6 +251,7 @@ function cur(): Tab {
 }
 
 function tabTitle(t: Tab): string {
+  if (t.isTrash) return "Trash";
   if (t.path === "/") return "This PC";
   const name = t.path.replace(/\/+$/, "").split("/").pop() ?? "";
   return name || "This PC";
@@ -245,7 +262,13 @@ function saveTabs(): void {
     localStorage.setItem(
       "filemon-tabs",
       JSON.stringify(
-        state.tabs.map((t) => ({ path: t.path, view: t.view, sortKey: t.sortKey, sortDir: t.sortDir })),
+        state.tabs.map((t) => ({
+          path: t.path,
+          view: t.view,
+          sortKey: t.sortKey,
+          sortDir: t.sortDir,
+          isTrash: t.isTrash,
+        })),
       ),
     );
     localStorage.setItem("filemon-active-tab", String(state.activeTab));
@@ -255,7 +278,7 @@ function saveTabs(): void {
 }
 
 function restoreTabs(home: string): void {
-  let saved: { path: string; view: Tab["view"]; sortKey: Tab["sortKey"]; sortDir: number }[] = [];
+  let saved: { path: string; view: Tab["view"]; sortKey: Tab["sortKey"]; sortDir: number; isTrash?: boolean }[] = [];
   try {
     const raw = JSON.parse(localStorage.getItem("filemon-tabs") ?? "[]");
     if (Array.isArray(raw)) saved = raw;
@@ -267,7 +290,7 @@ function restoreTabs(home: string): void {
   const view = (localStorage.getItem("filemon-view") as Tab["view"]) || "details";
   const sortKey = (localStorage.getItem("filemon-sort") as Tab["sortKey"]) || "name";
   const list = saved.filter((t) => typeof t?.path === "string" && t.path.startsWith("/"));
-  const seeds = list.length > 0 ? list : [{ path: home, view, sortKey, sortDir: 1 }];
+  const seeds = list.length > 0 ? list : [{ path: home, view, sortKey, sortDir: 1, isTrash: false }];
   state.tabs = seeds.map((t) => ({
     id: state.nextTabId++,
     path: t.path,
@@ -276,6 +299,7 @@ function restoreTabs(home: string): void {
     view: t.view === "icons" ? "icons" : "details",
     sortKey: (["name", "size", "modified", "type"].includes(t.sortKey) ? t.sortKey : "name") as Tab["sortKey"],
     sortDir: t.sortDir === -1 ? -1 : 1,
+    isTrash: t.isTrash === true,
   }));
   const active = Number(localStorage.getItem("filemon-active-tab") ?? "0");
   state.activeTab = active >= 0 && active < state.tabs.length ? active : 0;
@@ -349,6 +373,7 @@ function newTab(path = state.path): void {
     view: src.view,
     sortKey: src.sortKey,
     sortDir: src.sortDir,
+    isTrash: false,
   });
   void switchTab(state.tabs.length - 1);
 }
@@ -357,6 +382,7 @@ async function closeTab(i: number): Promise<void> {
   if (state.tabs.length === 1) {
     // Last tab: replace it with a fresh one at Home instead of closing the window.
     const t = state.tabs[0];
+    t.isTrash = false;
     t.path = state.homeDir;
     t.history = [state.homeDir];
     t.histIndex = 0;
@@ -384,6 +410,67 @@ function openInNewTab(path: string): void {
   newTab(path);
 }
 
+/** Switch the active tab to the Trash (the freedesktop Trash, not a folder). */
+async function openTrash(): Promise<void> {
+  state.isTrash = true;
+  state.selection.clear();
+  state.searching = false;
+  state.searchQuery = "";
+  ($("search") as HTMLInputElement).value = "";
+  await loadDir();
+  updateNavButtons();
+}
+
+async function doRestore(): Promise<void> {
+  const paths = [...state.selection];
+  if (paths.length === 0) return;
+  try {
+    const n = await invoke<number>("restore_trash", { paths });
+    state.selection.clear();
+    toast(`${n} item${n === 1 ? "" : "s"} restored`);
+    await loadDir();
+  } catch (err) {
+    toast(`Restore failed: ${err}`, true);
+  }
+}
+
+async function doDeletePermanent(): Promise<void> {
+  const paths = [...state.selection];
+  if (paths.length === 0) return;
+  try {
+    const n = await invoke<number>("delete_trash", { paths });
+    state.selection.clear();
+    toast(`${n} item${n === 1 ? "" : "s"} permanently deleted`);
+    await loadDir();
+  } catch (err) {
+    toast(`Delete failed: ${err}`, true);
+  }
+}
+
+async function doEmptyTrash(): Promise<void> {
+  try {
+    const n = await invoke<number>("empty_trash");
+    state.selection.clear();
+    toast(n === 0 ? "Trash is already empty" : `Trash emptied (${n} item${n === 1 ? "" : "s"})`);
+    await loadDir();
+  } catch (err) {
+    toast(`Empty Trash failed: ${err}`, true);
+  }
+}
+
+/** Move files to the Trash (drop target of the sidebar Trash item). */
+async function trashPaths(paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  try {
+    const n = await invoke<number>("delete_paths", { paths });
+    state.selection.clear();
+    toast(`${n} item${n === 1 ? "" : "s"} moved to Trash`);
+    await loadDir();
+  } catch (err) {
+    toast(`Delete failed: ${err}`, true);
+  }
+}
+
 function applyFilterSort(): void {
   let list = state.entries;
   if (!state.showHidden) list = list.filter((e) => !e.hidden);
@@ -406,6 +493,14 @@ function applyFilterSort(): void {
 function renderCrumbs(): void {
   const nav = $("crumbs");
   nav.innerHTML = "";
+  if (state.isTrash) {
+    const b = document.createElement("span");
+    b.className = "crumb";
+    b.textContent = "Trash";
+    nav.appendChild(b);
+    $("side-path").textContent = "Trash";
+    return;
+  }
   const parts = state.path.split("/").filter(Boolean);
   const mk = (label: string, path: string) => {
     const b = document.createElement("button");
@@ -437,7 +532,9 @@ function renderTable(): void {
     const tr = document.createElement("tr");
     tr.dataset.path = e.path;
     if (state.selection.has(e.path)) tr.classList.add("is-selected");
-    tr.draggable = true;
+    // Trashed items cannot be dragged out (Restore is the way back); that
+    // also keeps the .trashinfo from being orphaned by a move.
+    tr.draggable = !state.isTrash;
     tr.addEventListener("dragstart", (ev) => onDragStart(ev, e, tr));
     tr.addEventListener("dragend", () => onDragEnd(tr));
     if (e.is_dir) attachDropTarget(tr, () => e.path);
@@ -446,7 +543,7 @@ function renderTable(): void {
     // Putting it on the td itself turns the cell into a flex box, and
     // WebKitGTK then drops that cell's collapsed bottom border, so the row
     // dividers looked cut under the Name column.
-    nameTd.innerHTML = `<div class="cell-name">${iconSvg(iconFor(e), "icon file-icon")}<span class="file-name">${escapeHtml(e.name)}</span></div>`;
+    nameTd.innerHTML = `<div class="cell-name">${iconSvg(iconFor(e), "icon file-icon")}<div class="cell-name-text"><span class="file-name">${escapeHtml(e.name)}</span>${state.isTrash && e.original_path ? `<span class="file-sub" title="${escapeHtml(e.original_path)}">${escapeHtml(e.original_path)}</span>` : ""}</div></div>`;
     const modTd = document.createElement("td");
     modTd.textContent = fmtDate(e.modified);
     const typeTd = document.createElement("td");
@@ -487,11 +584,12 @@ function renderGrid(): void {
     tile.type = "button";
     tile.className = "tile";
     if (state.selection.has(e.path)) tile.classList.add("is-selected");
-    tile.draggable = true;
+    tile.draggable = !state.isTrash;
     tile.addEventListener("dragstart", (ev) => onDragStart(ev, e, tile));
     tile.addEventListener("dragend", () => onDragEnd(tile));
     if (e.is_dir) attachDropTarget(tile, () => e.path);
     tile.innerHTML = `${iconSvg(iconFor(e), "icon tile-icon")}<span class="tile-name">${escapeHtml(e.name)}</span>`;
+    if (state.isTrash && e.original_path) tile.title = e.original_path;
     tile.addEventListener("click", (ev) => onRowClick(ev, e));
     tile.addEventListener("dblclick", (ev) => {
       if (ev.ctrlKey || ev.metaKey) void openEntry(e, true);
@@ -663,6 +761,14 @@ function renderSelection(): void {
   });
   const n = state.selection.size;
   const has = n > 0;
+  // Trash mode swaps the file-action buttons for Restore / Delete permanently.
+  for (const id of ["act-new-folder", "act-new-file", "act-cut", "act-copy", "act-paste", "act-rename", "act-delete", "act-props"]) {
+    ($(id) as HTMLButtonElement).hidden = state.isTrash;
+  }
+  ($("act-restore") as HTMLButtonElement).hidden = !state.isTrash;
+  ($("act-delete-permanent") as HTMLButtonElement).hidden = !state.isTrash;
+  ($("act-restore") as HTMLButtonElement).disabled = !has;
+  ($("act-delete-permanent") as HTMLButtonElement).disabled = !has;
   for (const id of ["act-cut", "act-copy", "act-rename", "act-delete", "act-props"]) {
     ($ (id) as HTMLButtonElement).disabled = !has;
   }
@@ -712,10 +818,16 @@ function render(): void {
   renderGrid();
   renderStatus();
   renderSelection();
+  updateTrashNav();
   $("table-wrap").hidden = state.view !== "details";
   $("grid-wrap").hidden = state.view !== "icons";
   $("view-details").classList.toggle("is-active", state.view === "details");
   $("view-icons").classList.toggle("is-active", state.view === "icons");
+  // In Trash the Date column is the deletion date, not the modification date.
+  const dateTh = document.querySelector('#file-table th[data-sort="modified"]');
+  if (dateTh) dateTh.textContent = state.isTrash ? "Date deleted" : "Date modified";
+  const dateOpt = document.querySelector('#sort-key option[value="modified"]');
+  if (dateOpt) dateOpt.textContent = state.isTrash ? "Date deleted" : "Date modified";
 }
 
 function showState(which: "loading" | "empty" | "error" | "full"): void {
@@ -729,11 +841,21 @@ function showState(which: "loading" | "empty" | "error" | "full"): void {
 async function loadDir(): Promise<void> {
   showState("loading");
   try {
-    const entries = await invoke<Entry[]>("list_dir", { path: state.path });
+    const entries = state.isTrash
+      ? await invoke<Entry[]>("list_trash")
+      : await invoke<Entry[]>("list_dir", { path: state.path });
     state.entries = entries;
     render();
-    ($("empty") as HTMLElement).querySelector("h2")!.textContent = "This folder is empty";
-    ($("empty") as HTMLElement).querySelector("p")!.textContent = "Nothing here yet. Create a folder or paste files into it.";
+    const emptyEl = $("empty") as HTMLElement;
+    if (state.isTrash) {
+      emptyEl.querySelector("h2")!.textContent = "Trash is empty";
+      emptyEl.querySelector("p")!.textContent = "Deleted items will appear here. You can restore them or delete them permanently.";
+      ($("empty-new-folder") as HTMLButtonElement).hidden = true;
+    } else {
+      emptyEl.querySelector("h2")!.textContent = "This folder is empty";
+      emptyEl.querySelector("p")!.textContent = "Nothing here yet. Create a folder or paste files into it.";
+      ($("empty-new-folder") as HTMLButtonElement).hidden = false;
+    }
     showState(state.filtered.length === 0 ? "empty" : "full");
     renderStatus();
   } catch (err) {
@@ -762,6 +884,8 @@ function onRowClick(ev: MouseEvent, e: Entry): void {
 
 async function openEntry(e: Entry, newTab = false): Promise<void> {
   if (e.is_dir) {
+    // A trashed folder has no inside to browse: Restore is the way back.
+    if (state.isTrash) return;
     if (newTab) openInNewTab(e.path);
     else await navigate(e.path);
     return;
@@ -820,12 +944,35 @@ async function doExtract(): Promise<void> {
 function askDelete(): void {
   const items = selectedEntries();
   if (items.length === 0) return;
+  if (state.isTrash) {
+    // In Trash, Delete means delete permanently, not "move to Trash" again.
+    deleteMode = "permanent";
+    ($("delete-title") as HTMLElement).textContent = "Delete permanently?";
+    $("delete-text").textContent =
+      items.length === 1
+        ? `“${items[0].name}” will be permanently deleted. This cannot be undone.`
+        : `${items.length} items will be permanently deleted. This cannot be undone.`;
+    ($("dlg-delete") as HTMLDialogElement).showModal();
+    return;
+  }
+  deleteMode = "trash";
+  ($("delete-title") as HTMLElement).textContent = "Move to Trash?";
   $("delete-text").textContent =
     items.length === 1
       ? `“${items[0].name}” will be moved to the Trash. You can restore it from there.`
       : `${items.length} items will be moved to the Trash. You can restore them from there.`;
   ($("dlg-delete") as HTMLDialogElement).showModal();
 }
+
+function askEmptyTrash(): void {
+  deleteMode = "empty";
+  ($("delete-title") as HTMLElement).textContent = "Empty Trash?";
+  $("delete-text").textContent = `All ${state.entries.length} item${state.entries.length === 1 ? "" : "s"} in the Trash will be permanently deleted. This cannot be undone.`;
+  ($("dlg-delete") as HTMLDialogElement).showModal();
+}
+
+// Which confirm the delete dialog is asking for (see askDelete / askEmptyTrash).
+let deleteMode: "trash" | "permanent" | "empty" = "trash";
 
 async function doDelete(): Promise<void> {
   const paths = [...state.selection];
@@ -990,7 +1137,14 @@ function showContextMenu(x: number, y: number, target: Entry | null): void {
   const menu = $("ctx-menu");
   menu.innerHTML = "";
   const items: { label: string; disabled?: boolean; action: () => void | Promise<void> }[] = [];
-  if (target) {
+  if (state.isTrash) {
+    if (target) {
+      items.push({ label: "Restore", action: () => void doRestore() });
+      items.push({ label: "Delete permanently", action: askDelete });
+    } else {
+      items.push({ label: "Empty Trash", disabled: state.entries.length === 0, action: askEmptyTrash });
+    }
+  } else if (target) {
     items.push({ label: "Open", action: () => void openEntry(target) });
     if (target.is_dir) items.push({ label: "Open in new tab", action: () => void openInNewTab(target.path) });
     items.push({ label: "Copy", action: () => void doCopyCut("copy") });
@@ -1036,6 +1190,12 @@ function escapeHtml(s: string): string {
 
 async function runSearch(): Promise<void> {
   const q = ($("search") as HTMLInputElement).value.trim();
+  if (state.isTrash) {
+    // The name filter above already works in Trash; the everywhere search
+    // needs a real folder root, so it is not available here.
+    if (q) toast("Search is not available in Trash — filter by name instead");
+    return;
+  }
   if (!q) {
     state.searching = false;
     state.searchQuery = "";
@@ -1058,6 +1218,12 @@ async function runSearch(): Promise<void> {
     toast(`Search failed: ${err}`, true);
     await loadDir();
   }
+}
+
+function updateTrashNav(): void {
+  document.querySelectorAll("#trash-list .nav-item").forEach((b) => {
+    b.classList.toggle("is-active", state.isTrash);
+  });
 }
 
 function renderSidebar(): void {
@@ -1094,6 +1260,28 @@ function renderSidebar(): void {
     attachDropTarget(b, () => d.mount);
     dl.appendChild(b);
   }
+  // Trash: a virtual location (the freedesktop Trash), not a folder.
+  // Dropping files onto it deletes them — same as dragging to the Recycle Bin.
+  const tl = $("trash-list");
+  tl.innerHTML = "";
+  const trashBtn = document.createElement("button");
+  trashBtn.type = "button";
+  trashBtn.className = "nav-item" + (state.isTrash ? " is-active" : "");
+  trashBtn.innerHTML = `${iconSvg(ICONS.trash)}Trash`;
+  trashBtn.addEventListener("click", () => void openTrash());
+  trashBtn.addEventListener("dragover", (ev) => {
+    if (!isInternalDrag(ev)) return;
+    ev.preventDefault();
+    ev.dataTransfer!.dropEffect = "move";
+    markDropTarget(trashBtn);
+  });
+  trashBtn.addEventListener("drop", (ev) => {
+    ev.preventDefault();
+    markDropTarget(null);
+    const paths = dropPaths(ev);
+    if (paths) void trashPaths(paths);
+  });
+  tl.appendChild(trashBtn);
 }
 
 async function init(): Promise<void> {
@@ -1170,6 +1358,8 @@ async function init(): Promise<void> {
   $("act-rename").addEventListener("click", askRename);
   $("act-delete").addEventListener("click", askDelete);
   $("act-props").addEventListener("click", () => void showProperties());
+  $("act-restore").addEventListener("click", () => void doRestore());
+  $("act-delete-permanent").addEventListener("click", askDelete);
 
   ($("show-hidden") as HTMLInputElement).addEventListener("change", (ev) => {
     state.showHidden = (ev.target as HTMLInputElement).checked;
@@ -1246,6 +1436,7 @@ async function init(): Promise<void> {
   fileArea.addEventListener("drop", (ev) => {
     ev.preventDefault();
     markDropTarget(null);
+    if (state.isTrash) return;
     const paths = dropPaths(ev);
     if (!paths) return;
     void performDrop(paths, state.path, ev.ctrlKey);
@@ -1256,6 +1447,7 @@ async function init(): Promise<void> {
   // source app's intent is unknowable, so copy is the safe default.
   void listen<{ paths: string[]; position: { x: number; y: number } }>("tauri://drag-drop", (ev) => {
     $("drop-overlay").hidden = true;
+    if (state.isTrash) return;
     void performDrop(ev.payload.paths, state.path, true);
   });
   void listen("tauri://drag-enter", () => {
@@ -1355,7 +1547,9 @@ async function init(): Promise<void> {
   });
   ($("delete-confirm") as HTMLButtonElement).addEventListener("click", (ev) => {
     ev.preventDefault();
-    void doDelete();
+    if (deleteMode === "permanent") void doDeletePermanent();
+    else if (deleteMode === "empty") void doEmptyTrash();
+    else void doDelete();
   });
   for (const id of ["dlg-rename", "dlg-new", "dlg-delete"]) {
     ($(id) as HTMLDialogElement).addEventListener("click", (ev) => {
@@ -1363,14 +1557,21 @@ async function init(): Promise<void> {
     });
   }
 
-  // Restore the active tab's folder; fall back to Home if it no longer exists.
-  await navigate(state.path, false);
-  if (!($("error") as HTMLElement).hidden) {
-    state.path = home;
-    state.history = [home];
-    state.histIndex = 0;
+  // Restore the active tab's folder (or the Trash); fall back to Home if
+  // the restored folder no longer exists.
+  if (state.isTrash) {
+    state.selection.clear();
     await loadDir();
     updateNavButtons();
+  } else {
+    await navigate(state.path, false);
+    if (!($("error") as HTMLElement).hidden) {
+      state.path = home;
+      state.history = [home];
+      state.histIndex = 0;
+      await loadDir();
+      updateNavButtons();
+    }
   }
 }
 

@@ -55,6 +55,8 @@
           <div id="quick-list"></div>
           <p class="nav-label">Drives</p>
           <div id="drive-list"></div>
+          <p class="nav-label">Trash</p>
+          <div id="trash-list"></div>
         </nav>
         <div class="sidebar-foot">
           <div class="sidebar-foot-row"><span>Location</span><strong id="side-path" class="mono">—</strong></div>
@@ -89,6 +91,8 @@
           <span class="toolbar-sep" aria-hidden="true"></span>
           <button id="act-rename" class="icon-btn" type="button" disabled title="Rename" aria-label="Rename"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.8 2.8l2.4 2.4L6 12.4H3.6V10z"/><path d="M9.2 4.4l2.4 2.4"/></svg></button>
           <button id="act-delete" class="icon-btn btn-danger" type="button" disabled title="Delete" aria-label="Delete"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4h11M6.5 4V2.8h3V4M4 4l.8 10h6.4L12 4M6.5 7v4M9.5 7v4"/></svg></button>
+          <button id="act-restore" class="icon-btn" type="button" disabled hidden title="Restore" aria-label="Restore"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 3.5L3 7l3.5 3.5"/><path d="M3 7h6a4 4 0 0 1 0 8H7"/></svg></button>
+          <button id="act-delete-permanent" class="icon-btn btn-danger" type="button" disabled hidden title="Delete permanently" aria-label="Delete permanently"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4h11M6.5 4V2.8h3V4M4 4l.8 10h6.4L12 4M6.5 7v4M9.5 7v4"/></svg></button>
           <button id="act-props" class="icon-btn" type="button" disabled title="Properties" aria-label="Properties"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.5V11M8 4.8v.3"/></svg></button>
           <span class="toolbar-spacer"></span>
           <label class="check-label"><input id="show-hidden" type="checkbox" /> Hidden files</label>
@@ -181,7 +185,7 @@
 
     <dialog id="dlg-delete" class="dialog">
       <form method="dialog">
-        <h2>Move to Trash?</h2>
+        <h2 id="delete-title">Move to Trash?</h2>
         <p id="delete-text">—</p>
         <div class="dialog-actions">
           <button class="btn btn-outline" value="cancel" type="submit">Cancel</button>

@@ -125,6 +125,28 @@ fn extract_archive(path: String, dest: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn list_trash() -> Vec<Entry> {
+    fsops::list_trash()
+}
+
+#[tauri::command]
+fn restore_trash(paths: Vec<String>) -> Result<usize, String> {
+    let ps: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+    fsops::restore_trash(&ps)
+}
+
+#[tauri::command]
+fn delete_trash(paths: Vec<String>) -> Result<usize, String> {
+    let ps: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+    fsops::delete_trash(&ps)
+}
+
+#[tauri::command]
+fn empty_trash() -> Result<usize, String> {
+    fsops::empty_trash()
+}
+
+#[tauri::command]
 fn format_size(bytes: u64) -> String {
     fsops::format_size(bytes)
 }
@@ -143,6 +165,10 @@ pub fn run() {
             cancel_transfer,
             compress_paths,
             extract_archive,
+            list_trash,
+            restore_trash,
+            delete_trash,
+            empty_trash,
             delete_paths,
             rename_path,
             new_folder,
