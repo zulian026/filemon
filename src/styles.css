@@ -25,9 +25,10 @@ body { font-size: var(--text-sm); line-height: 1.45; }
 .nav-item.is-active { background: var(--color-paper-3); color: var(--color-ink); box-shadow: inset 2px 0 0 var(--color-accent); }
 .nav-item .icon { flex: none; }
 .nav-item span:not(.nav-meta) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nav-meta { margin-left: auto; color: var(--color-muted-2); font-size: var(--text-xs); }
+.nav-meta { margin-left: auto; color: var(--color-muted-2); font-size: var(--text-xs); white-space: nowrap; flex: none; }
 .sidebar-foot { border-top: var(--rule-hair) solid var(--color-rule); padding: var(--space-sm) var(--space-md); }
 .sidebar-foot-row { display: flex; justify-content: space-between; gap: var(--space-sm); padding: var(--space-3xs) 0; color: var(--color-muted); }
+.sidebar-foot-row > span { white-space: nowrap; flex: none; }
 .sidebar-foot-row strong { color: var(--color-ink-2); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mono { font-family: var(--font-outlier); font-variant-numeric: tabular-nums; }
 
