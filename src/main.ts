@@ -170,10 +170,20 @@ const ICONS: Record<string, string> = {
   undo: '<path d="M6.5 3.5L3 7l3.5 3.5"/><path d="M3 7h6a4 4 0 0 1 0 8H7"/>',
 };
 
+function isImageEntry(e: Entry): boolean {
+  if (e.is_dir) return false;
+  switch (e.extension) {
+    case "png": case "jpg": case "jpeg": case "gif": case "webp": case "svg": case "bmp":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function iconFor(e: Entry): string {
   if (e.is_dir) return ICONS.folder;
+  if (isImageEntry(e)) return ICONS.image;
   switch (e.extension) {
-    case "png": case "jpg": case "jpeg": case "gif": case "webp": case "svg": case "bmp": return ICONS.image;
     case "mp4": case "mkv": case "webm": case "mov": case "avi": return ICONS.video;
     case "mp3": case "flac": case "wav": case "ogg": case "m4a": return ICONS.audio;
     case "zip": case "tar": case "gz": case "xz": case "7z": case "rar": case "deb": case "rpm": return ICONS.archive;
@@ -594,7 +604,25 @@ function renderGrid(): void {
     tile.addEventListener("dragstart", (ev) => onDragStart(ev, e, tile));
     tile.addEventListener("dragend", () => onDragEnd(tile));
     if (e.is_dir) attachDropTarget(tile, () => e.path);
-    tile.innerHTML = `${iconSvg(iconFor(e), "icon tile-icon" + (e.is_dir ? " is-dir" : ""))}<span class="tile-name">${escapeHtml(e.name)}</span>`;
+    // Image files show a real thumbnail over the generic icon. The icon
+    // stays underneath as the fallback: a broken or unsupported image just
+    // drops its <img> and the icon shows through.
+    const iconWrap = document.createElement("span");
+    iconWrap.className = "tile-thumb-wrap";
+    iconWrap.innerHTML = iconSvg(iconFor(e), "icon tile-icon" + (e.is_dir ? " is-dir" : ""));
+    if (isImageEntry(e)) {
+      const img = document.createElement("img");
+      img.className = "tile-thumb";
+      img.alt = "";
+      img.loading = "lazy";
+      img.src = convertFileSrc(e.path);
+      img.addEventListener("error", () => img.remove());
+      iconWrap.appendChild(img);
+    }
+    const nameEl = document.createElement("span");
+    nameEl.className = "tile-name";
+    nameEl.textContent = e.name;
+    tile.append(iconWrap, nameEl);
     if (state.isTrash && e.original_path) tile.title = e.original_path;
     tile.addEventListener("click", (ev) => onRowClick(ev, e));
     tile.addEventListener("dblclick", (ev) => {
