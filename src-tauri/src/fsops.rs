@@ -90,7 +90,9 @@ pub fn list_dir(path: &Path) -> Result<Vec<Entry>, String> {
 }
 
 /// Mounted drives, from sysinfo. Snap/loop mounts are hidden: they are not
-/// places a user browses to.
+/// places a user browses to. Zero-size entries (binds, pseudo-filesystems)
+/// are dropped, and the label is the mount point: sysinfo's Linux disk name
+/// is the raw device path, which repeats for every mount of one disk.
 pub fn drives() -> Vec<Drive> {
     use sysinfo::{DiskRefreshKind, Disks};
     let disks = Disks::new_with_refreshed_list_specifics(DiskRefreshKind::nothing());
@@ -98,24 +100,25 @@ pub fn drives() -> Vec<Drive> {
         .iter()
         .filter(|d| {
             let m = d.mount_point().to_string_lossy();
-            !m.starts_with("/snap")
+            d.total_space() > 0
+                && !m.starts_with("/snap")
                 && !m.starts_with("/var/lib/snapd")
                 && !d.name().to_string_lossy().starts_with("loop")
         })
-        .map(|d| Drive {
-            name: {
-                let n = d.name().to_string_lossy().into_owned();
-                if n.is_empty() {
-                    d.mount_point().to_string_lossy().into_owned()
+        .map(|d| {
+            let mount = d.mount_point().to_string_lossy().into_owned();
+            Drive {
+                name: if mount == "/" {
+                    "System disk".into()
                 } else {
-                    n
-                }
-            },
-            mount: d.mount_point().to_string_lossy().into_owned(),
-            total: d.total_space(),
-            free: d.available_space(),
-            fs: d.file_system().to_string_lossy().into_owned(),
-            removable: d.is_removable(),
+                    mount.clone()
+                },
+                mount,
+                total: d.total_space(),
+                free: d.available_space(),
+                fs: d.file_system().to_string_lossy().into_owned(),
+                removable: d.is_removable(),
+            }
         })
         .collect();
     out.sort_by(|a, b| a.mount.cmp(&b.mount));
