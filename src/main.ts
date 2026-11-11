@@ -100,6 +100,19 @@ const ICONS: Record<string, string> = {
   audio: '<path d="M6 12V4.5l6-1.5V11"/><circle cx="4" cy="12" r="2"/><circle cx="10" cy="11" r="2"/>',
   archive: '<rect x="2.5" y="3" width="11" height="3" rx="0.5"/><path d="M3.5 6v6.5A1.5 1.5 0 0 0 5 14h6a1.5 1.5 0 0 0 1.5-1.5V6M8 8.5v3M6.5 10h3"/>',
   doc: '<path d="M4 1.5h5.5L13 5v9.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1z"/><path d="M5.5 8h5M5.5 10.5h5"/>',
+  panel: '<rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M10.5 2.5v11"/>',
+  sun: '<circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/>',
+  moon: '<path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/>',
+  folderPlus: '<path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 2h6.5A1.5 1.5 0 0 1 16 6.5v6A1.5 1.5 0 0 1 14.5 14h-11A1.5 1.5 0 0 1 2 12.5v-8z"/><path d="M11 12.5h4M13 10.5v4"/>',
+  filePlus: '<path d="M4 1.5h5.5L13 5v9.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1z"/><path d="M9 1.5V5.5h4"/><path d="M10.5 12.5h4M12.5 10.5v4"/>',
+  scissors: '<circle cx="4.5" cy="4.5" r="1.8"/><circle cx="4.5" cy="11.5" r="1.8"/><path d="M6 6l8 5M6 10l8-5"/>',
+  copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/>',
+  paste: '<rect x="3.5" y="3.5" width="9" height="11" rx="1"/><path d="M6 3.5V2.8a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v.7M6.5 8h3M6.5 10.5h3"/>',
+  pencil: '<path d="M10.8 2.8l2.4 2.4L6 12.4H3.6V10z"/><path d="M9.2 4.4l2.4 2.4"/>',
+  trash: '<path d="M2.5 4h11M6.5 4V2.8h3V4M4 4l.8 10h6.4L12 4M6.5 7v4M9.5 7v4"/>',
+  info: '<circle cx="8" cy="8" r="6.5"/><path d="M8 7.5V11M8 4.8v.3"/>',
+  list: '<path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.5M2.5 8h.5M2.5 12h.5"/>',
+  grid: '<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="0.5"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="0.5"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="0.5"/><rect x="9" y="9" width="4.5" height="4.5" rx="0.5"/>',
 };
 
 function iconFor(e: Entry): string {
@@ -573,6 +586,7 @@ function setPreview(open: boolean): void {
   state.previewOpen = open;
   $("preview").hidden = !open;
   $("preview-toggle").setAttribute("aria-pressed", String(open));
+  $("preview-toggle").classList.toggle("is-active", open);
   if (open) void updatePreview();
 }
 
@@ -795,7 +809,10 @@ async function init(): Promise<void> {
 
   const themeBtn = $("theme-toggle");
   const applyThemeLabel = () => {
-    themeBtn.textContent = document.documentElement.dataset.theme === "light" ? "Dark mode" : "Light mode";
+    const light = document.documentElement.dataset.theme === "light";
+    themeBtn.innerHTML = iconSvg(light ? ICONS.moon : ICONS.sun);
+    themeBtn.title = light ? "Switch to dark mode" : "Switch to light mode";
+    themeBtn.setAttribute("aria-label", themeBtn.title);
   };
   applyThemeLabel();
   // Re-apply the stored theme through __setTheme so the inline custom

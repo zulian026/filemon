@@ -74,21 +74,21 @@
             <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.6 10.6L14 14"/></svg>
             <input id="search" type="search" placeholder="Search this folder, Enter searches everywhere below" aria-label="Search" autocomplete="off" />
           </div>
-          <button id="preview-toggle" class="btn btn-sm btn-outline" type="button" aria-pressed="false">Preview</button>
-          <button id="theme-toggle" class="btn btn-sm btn-outline" type="button">Light mode</button>
+          <button id="preview-toggle" class="icon-btn" type="button" aria-pressed="false" title="Toggle preview" aria-label="Toggle preview"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M10.5 2.5v11"/></svg></button>
+          <button id="theme-toggle" class="icon-btn" type="button" title="Switch to light mode" aria-label="Switch to light mode"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/></svg></button>
         </header>
 
         <div id="toolbar" role="toolbar" aria-label="File actions">
-          <button id="act-new-folder" class="btn btn-sm" type="button">New folder</button>
-          <button id="act-new-file" class="btn btn-sm" type="button">New file</button>
+          <button id="act-new-folder" class="icon-btn" type="button" title="New folder" aria-label="New folder"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 2h6.5A1.5 1.5 0 0 1 16 6.5v6A1.5 1.5 0 0 1 14.5 14h-11A1.5 1.5 0 0 1 2 12.5v-8z"/><path d="M11 12.5h4M13 10.5v4"/></svg></button>
+          <button id="act-new-file" class="icon-btn" type="button" title="New file" aria-label="New file"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 1.5h5.5L13 5v9.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1z"/><path d="M9 1.5V5.5h4"/><path d="M10.5 12.5h4M12.5 10.5v4"/></svg></button>
           <span class="toolbar-sep" aria-hidden="true"></span>
-          <button id="act-cut" class="btn btn-sm" type="button" disabled>Cut</button>
-          <button id="act-copy" class="btn btn-sm" type="button" disabled>Copy</button>
-          <button id="act-paste" class="btn btn-sm" type="button" disabled>Paste</button>
+          <button id="act-cut" class="icon-btn" type="button" disabled title="Cut" aria-label="Cut"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.5" cy="4.5" r="1.8"/><circle cx="4.5" cy="11.5" r="1.8"/><path d="M6 6l8 5M6 10l8-5"/></svg></button>
+          <button id="act-copy" class="icon-btn" type="button" disabled title="Copy" aria-label="Copy"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg></button>
+          <button id="act-paste" class="icon-btn" type="button" disabled title="Paste" aria-label="Paste"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="11" rx="1"/><path d="M6 3.5V2.8a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v.7M6.5 8h3M6.5 10.5h3"/></svg></button>
           <span class="toolbar-sep" aria-hidden="true"></span>
-          <button id="act-rename" class="btn btn-sm" type="button" disabled>Rename</button>
-          <button id="act-delete" class="btn btn-sm btn-danger" type="button" disabled>Delete</button>
-          <button id="act-props" class="btn btn-sm" type="button" disabled>Properties</button>
+          <button id="act-rename" class="icon-btn" type="button" disabled title="Rename" aria-label="Rename"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.8 2.8l2.4 2.4L6 12.4H3.6V10z"/><path d="M9.2 4.4l2.4 2.4"/></svg></button>
+          <button id="act-delete" class="icon-btn btn-danger" type="button" disabled title="Delete" aria-label="Delete"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4h11M6.5 4V2.8h3V4M4 4l.8 10h6.4L12 4M6.5 7v4M9.5 7v4"/></svg></button>
+          <button id="act-props" class="icon-btn" type="button" disabled title="Properties" aria-label="Properties"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.5V11M8 4.8v.3"/></svg></button>
           <span class="toolbar-spacer"></span>
           <label class="check-label"><input id="show-hidden" type="checkbox" /> Hidden files</label>
           <label class="sort-label" for="sort-key">Sort</label>
@@ -99,8 +99,8 @@
             <option value="type">Type</option>
           </select>
           <div class="segmented" role="group" aria-label="View">
-            <button id="view-details" class="seg-btn is-active" type="button">Details</button>
-            <button id="view-icons" class="seg-btn" type="button">Icons</button>
+            <button id="view-details" class="seg-btn is-active" type="button" title="Details view" aria-label="Details view"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.5M2.5 8h.5M2.5 12h.5"/></svg></button>
+            <button id="view-icons" class="seg-btn" type="button" title="Icons view" aria-label="Icons view"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="0.5"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="0.5"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="0.5"/><rect x="9" y="9" width="4.5" height="4.5" rx="0.5"/></svg></button>
           </div>
         </div>
 
