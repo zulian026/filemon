@@ -201,6 +201,12 @@
 
     <div id="toast" class="toast" role="status" hidden></div>
     <div id="drop-overlay" hidden><p>Drop files here to copy into <span id="drop-overlay-path" class="mono"></span></p></div>
+    <div id="transfer-panel" class="transfer-panel" hidden>
+      <div class="transfer-head"><span id="transfer-title">Copying…</span><span id="transfer-count" class="mono"></span></div>
+      <progress id="transfer-bar" max="100" value="0"></progress>
+      <div class="transfer-sub"><span id="transfer-file" class="mono"></span><span id="transfer-bytes" class="mono"></span></div>
+      <div class="transfer-actions"><button id="transfer-cancel" class="btn btn-sm btn-outline" type="button">Cancel</button></div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

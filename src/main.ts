@@ -385,13 +385,53 @@ async function performDrop(paths: string[], dest: string, copy: boolean): Promis
   }
   const moving = paths.filter((p) => parentOfPath(p) !== dest);
   if (moving.length === 0) return; // already in this folder — silent no-op
+  await runTransfer(moving, dest, copy);
+}
+
+/* ---- Transfer progress ---- */
+
+type TransferProgress = {
+  done_bytes: number;
+  total_bytes: number;
+  current: string;
+  done_files: number;
+  total_files: number;
+};
+
+type TransferOutcome = { done: number; cancelled: boolean };
+
+let transferRunning = false;
+let transferStart = 0;
+let transferTimer = 0;
+
+/**
+ * Copy/move with a progress panel. Fast transfers never show the panel
+ * (400 ms grace); slow ones show file, bytes and a Cancel button.
+ * Returns the outcome, or null when the transfer itself errored.
+ */
+async function runTransfer(paths: string[], dest: string, copy: boolean): Promise<TransferOutcome | null> {
+  transferRunning = true;
+  transferStart = Date.now();
+  ($("transfer-title") as HTMLElement).textContent = copy ? "Copying…" : "Moving…";
+  ($("transfer-cancel") as HTMLButtonElement).disabled = false;
+  transferTimer = window.setTimeout(() => {
+    if (transferRunning) $("transfer-panel").hidden = false;
+  }, 400);
   try {
-    const n = await invoke<number>(copy ? "copy_paths" : "move_paths", { paths: moving, dest });
+    const outcome = await invoke<TransferOutcome>("start_transfer", { paths, dest, copy });
+    if (outcome.cancelled) toast("Transfer cancelled");
+    else toast(`${outcome.done} item${outcome.done === 1 ? "" : "s"} ${copy ? "copied" : "moved"}`);
     state.selection.clear();
-    toast(`${n} item${n === 1 ? "" : "s"} ${copy ? "copied" : "moved"}`);
     await loadDir();
+    return outcome;
   } catch (err) {
-    toast(`Drop failed: ${err}`, true);
+    toast(`Transfer failed: ${err}`, true);
+    await loadDir();
+    return null;
+  } finally {
+    transferRunning = false;
+    window.clearTimeout(transferTimer);
+    $("transfer-panel").hidden = true;
   }
 }
 
@@ -527,13 +567,32 @@ async function doCopyCut(mode: "copy" | "cut"): Promise<void> {
 async function doPaste(): Promise<void> {
   const cb = state.clipboard;
   if (!cb) return;
+  const outcome = await runTransfer(cb.paths, state.path, cb.mode === "copy");
+  // A cancelled cut keeps its clipboard: the files never all moved.
+  if (outcome && !outcome.cancelled && cb.mode === "cut") state.clipboard = null;
+}
+
+async function doCompress(): Promise<void> {
+  const paths = [...state.selection];
+  if (paths.length === 0) return;
   try {
-    const n = await invoke<number>(cb.mode === "copy" ? "copy_paths" : "move_paths", { paths: cb.paths, dest: state.path });
-    if (cb.mode === "cut") state.clipboard = null;
-    toast(`${n} item${n === 1 ? "" : "s"} pasted`);
+    const name = await invoke<string>("compress_paths", { paths, dest: state.path });
+    toast(`Archive created: ${name}`);
     await loadDir();
   } catch (err) {
-    toast(`Paste failed: ${err}`, true);
+    toast(`Compress failed: ${err}`, true);
+  }
+}
+
+async function doExtract(): Promise<void> {
+  const [path] = [...state.selection];
+  if (!path) return;
+  try {
+    const folder = await invoke<string>("extract_archive", { path, dest: state.path });
+    toast(`Extracted to ${folder}`);
+    await loadDir();
+  } catch (err) {
+    toast(`Extract failed: ${err}`, true);
   }
 }
 
@@ -707,6 +766,10 @@ function showContextMenu(x: number, y: number, target: Entry | null): void {
     items.push({ label: "Open", action: () => void openEntry(target) });
     items.push({ label: "Copy", action: () => void doCopyCut("copy") });
     items.push({ label: "Cut", action: () => void doCopyCut("cut") });
+    items.push({ label: "Compress to ZIP", action: () => void doCompress() });
+    if (state.selection.size === 1 && (target.extension ?? "").toLowerCase() === "zip") {
+      items.push({ label: "Extract here", action: () => void doExtract() });
+    }
     items.push({ label: "Rename", disabled: state.selection.size !== 1, action: askRename });
     items.push({ label: "Delete", action: askDelete });
     items.push({ label: "Properties", disabled: state.selection.size !== 1, action: () => void showProperties() });
@@ -971,6 +1034,21 @@ async function init(): Promise<void> {
   });
   void listen("tauri://drag-leave", () => {
     $("drop-overlay").hidden = true;
+  });
+  void listen<TransferProgress>("transfer-progress", (ev) => {
+    const p = ev.payload;
+    if (!transferRunning) return;
+    if (Date.now() - transferStart > 400) $("transfer-panel").hidden = false;
+    const bar = $("transfer-bar") as HTMLProgressElement;
+    bar.max = Math.max(p.total_bytes, 1);
+    bar.value = p.done_bytes;
+    $("transfer-file").textContent = p.current;
+    $("transfer-count").textContent = `${p.done_files} of ${p.total_files} files`;
+    $("transfer-bytes").textContent = `${fmtSize(p.done_bytes)} of ${fmtSize(p.total_bytes)}`;
+  });
+  $("transfer-cancel").addEventListener("click", () => {
+    ($("transfer-cancel") as HTMLButtonElement).disabled = true;
+    void invoke("cancel_transfer");
   });
   // Never let the webview navigate away when a file is dropped on it.
   window.addEventListener("dragover", (ev) => ev.preventDefault());

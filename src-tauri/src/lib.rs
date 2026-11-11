@@ -3,8 +3,14 @@
 
 mod fsops;
 
-use fsops::{Drive, Entry, Properties};
+use fsops::{Drive, Entry, Properties, TransferOutcome};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::Emitter;
+
+/// One transfer at a time: a second paste/drop while one runs is rejected.
+static TRANSFER_BUSY: AtomicBool = AtomicBool::new(false);
+static TRANSFER_CANCEL: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
 fn get_home() -> String {
@@ -75,6 +81,50 @@ fn open_path(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn start_transfer(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+    dest: String,
+    copy: bool,
+) -> Result<TransferOutcome, String> {
+    if TRANSFER_BUSY
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("A transfer is already running".to_string());
+    }
+    TRANSFER_CANCEL.store(false, Ordering::SeqCst);
+    let srcs: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+    let result = fsops::transfer_files(
+        &srcs,
+        &PathBuf::from(dest),
+        copy,
+        &|p| {
+            let _ = app.emit("transfer-progress", p);
+        },
+        &TRANSFER_CANCEL,
+    );
+    TRANSFER_BUSY.store(false, Ordering::SeqCst);
+    result
+}
+
+#[tauri::command]
+fn cancel_transfer() {
+    TRANSFER_CANCEL.store(true, Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn compress_paths(paths: Vec<String>, dest: String) -> Result<String, String> {
+    let srcs: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+    fsops::compress_paths(&srcs, &PathBuf::from(dest))
+}
+
+#[tauri::command]
+fn extract_archive(path: String, dest: String) -> Result<String, String> {
+    fsops::extract_archive(&PathBuf::from(path), &PathBuf::from(dest))
+}
+
+#[tauri::command]
 fn format_size(bytes: u64) -> String {
     fsops::format_size(bytes)
 }
@@ -89,6 +139,10 @@ pub fn run() {
             search_files,
             copy_paths,
             move_paths,
+            start_transfer,
+            cancel_transfer,
+            compress_paths,
+            extract_archive,
             delete_paths,
             rename_path,
             new_folder,
