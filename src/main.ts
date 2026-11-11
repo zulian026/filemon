@@ -539,7 +539,15 @@ async function updatePreview(): Promise<void> {
   }
   if (e.extension && IMAGE_EXTS.has(e.extension)) {
     const url = convertFileSrc(e.path);
-    body.innerHTML = `<img class="preview-img" src="${url}" alt="Preview of ${escapeHtml(e.name)}" />`;
+    const img = document.createElement("img");
+    img.className = "preview-img";
+    img.src = url;
+    img.alt = `Preview of ${e.name}`;
+    img.onerror = () => {
+      body.innerHTML = `<p class="preview-note">Could not preview this image.</p>`;
+    };
+    body.innerHTML = "";
+    body.appendChild(img);
     return;
   }
   if (e.extension && TEXT_EXTS.has(e.extension) && (e.size ?? 0) < 200_000) {
