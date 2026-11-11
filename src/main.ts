@@ -608,6 +608,9 @@ function askDelete(): void {
 
 async function doDelete(): Promise<void> {
   const paths = [...state.selection];
+  // The confirm button preventDefaults the form submit (which would close
+  // the dialog), so dismiss it here: confirming ends the dialog's job.
+  ($("dlg-delete") as HTMLDialogElement).close();
   try {
     const n = await invoke<number>("delete_paths", { paths });
     state.selection.clear();
@@ -635,13 +638,15 @@ async function doRename(): Promise<void> {
   const name = ($("rename-input") as HTMLInputElement).value;
   try {
     await invoke("rename_path", { path: items[0].path, new_name: name });
+    ($("dlg-rename") as HTMLDialogElement).close();
     toast(`Renamed to ${name}`);
     await loadDir();
   } catch (err) {
+    // Dialog stays open (the confirm button preventDefaults the form submit),
+    // so the user can correct the name in place.
     const el = $("rename-error");
     el.textContent = String(err);
     el.hidden = false;
-    ($("dlg-rename") as HTMLDialogElement).showModal();
   }
 }
 
@@ -661,13 +666,15 @@ async function doNew(): Promise<void> {
   const name = ($("new-input") as HTMLInputElement).value;
   try {
     await invoke(newKind === "folder" ? "new_folder" : "new_file", { parent: state.path, name });
+    ($("dlg-new") as HTMLDialogElement).close();
     toast(newKind === "folder" ? "Folder created" : "File created");
     await loadDir();
   } catch (err) {
+    // Dialog stays open (the confirm button preventDefaults the form submit),
+    // so the user can correct the name in place.
     const el = $("new-error");
     el.textContent = String(err);
     el.hidden = false;
-    ($("dlg-new") as HTMLDialogElement).showModal();
   }
 }
 
@@ -1104,7 +1111,7 @@ async function init(): Promise<void> {
     ev.preventDefault();
     void doDelete();
   });
-  for (const id of ["dlg-rename", "dlg-new"]) {
+  for (const id of ["dlg-rename", "dlg-new", "dlg-delete"]) {
     ($(id) as HTMLDialogElement).addEventListener("click", (ev) => {
       if (ev.target === $(id)) ($(id) as HTMLDialogElement).close();
     });

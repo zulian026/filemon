@@ -523,7 +523,7 @@ pub fn compress_paths(paths: &[PathBuf], dest: &Path) -> Result<String, String> 
     };
     let name = format!("{}.zip", base);
     let target = if dest.join(&name).exists() {
-        PathBuf::from(unique_name(dest, &name))
+        copy_name(dest, &name)
     } else {
         dest.join(&name)
     };
@@ -582,7 +582,7 @@ pub fn extract_archive(path: &Path, dest: &Path) -> Result<String, String> {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "extracted".into());
     let folder = if dest.join(&stem).exists() {
-        PathBuf::from(unique_name(dest, &stem))
+        copy_name(dest, &stem)
     } else {
         dest.join(&stem)
     };
@@ -1092,6 +1092,45 @@ mod tests {
         assert!(extract_archive(&zip_path, &dst).is_err());
         assert!(!base.join("evil.txt").exists());
         assert!(!dst.join("evil.txt").exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn zip_and_extract_collision_stays_in_dest() {
+        // Regression: compress/extract built the collision target from the
+        // bare unique_name (a relative path), so the zip/folder landed in
+        // the app's working directory instead of the destination folder.
+        let base = std::env::temp_dir().join("filemon-test-zip-collision");
+        let _ = fs::remove_dir_all(&base);
+        let src = base.join("tree");
+        let dst = base.join("out");
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(src.join("a.txt"), b"collision").unwrap();
+        // Extract while "tree" already exists in the destination.
+        fs::create_dir_all(dst.join("tree")).unwrap();
+        let zip_path = base.join("tree.zip");
+        {
+            let name = compress_paths(&[src.clone()], &base).unwrap();
+            assert_eq!(name, "tree.zip");
+        }
+        let folder = extract_archive(&zip_path, &dst).unwrap();
+        assert_eq!(folder, "tree (copy)");
+        assert_eq!(
+            fs::read(dst.join("tree (copy)").join("a.txt")).unwrap(),
+            b"collision"
+        );
+        assert!(!std::env::current_dir().unwrap().join("tree (copy)").exists());
+        // Compress while "a.txt.zip" already exists in the destination.
+        fs::write(dst.join("a.txt"), b"x").unwrap();
+        fs::write(dst.join("a.txt.zip"), b"old").unwrap();
+        let name = compress_paths(&[dst.join("a.txt")], &dst).unwrap();
+        assert_eq!(name, "a.txt (copy).zip");
+        assert!(dst.join("a.txt (copy).zip").exists());
+        assert!(!std::env::current_dir()
+            .unwrap()
+            .join("a.txt (copy).zip")
+            .exists());
         let _ = fs::remove_dir_all(&base);
     }
 }
