@@ -1,0 +1,28 @@
+[
+ {
+  "shape": "app screen",
+  "theme": "Rim",
+  "axes": "dark/grotesk-sans/warm",
+  "hero": "none (app screen)",
+  "nav": "top bar + sidebar",
+  "footer": "status bar",
+  "imagery": "none (tool; file icons drawn inline)",
+  "photos": [],
+  "entry": "FileMon v0.1.0",
+  "fingerprint": "rim-lime-trueblack",
+  "sections": [
+   "nav pane",
+   "toolbar",
+   "file table",
+   "preview pane",
+   "status bar"
+  ],
+  "signature": "the file table",
+  "waived": [
+   "7b pure #000/#fff (family true-black-flat system)"
+  ],
+  "prompt": "File manager for Linux like Windows Explorer, Tauri desktop app",
+  "date": "2026-11-11",
+  "mode": "build"
+ }
+]

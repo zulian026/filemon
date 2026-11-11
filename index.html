@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FileMon — File Manager for Linux</title>
+    <meta name="description" content="FileMon is a Windows Explorer-style file manager for Linux: browse, search, copy, move, rename and organise files." />
+    <link rel="stylesheet" href="src/styles.css" />
+    <script>
+      /* Apply the saved theme before first paint so the window never
+         flashes the wrong theme. Default is dark. */
+      try {
+        var t = localStorage.getItem("filemon-theme");
+        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <div class="wordmark">
+          <svg class="wordmark-mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect x="3" y="7" width="11" height="4" fill="var(--color-accent)"/><rect x="3" y="10" width="26" height="18" fill="var(--color-accent)"/><rect x="7" y="14" width="18" height="2" fill="var(--color-paper)"/></svg>
+          <span class="wordmark-name">FileMon</span>
+        </div>
+        <nav id="nav" aria-label="Locations">
+          <p class="nav-label">Quick access</p>
+          <div id="quick-list"></div>
+          <p class="nav-label">Drives</p>
+          <div id="drive-list"></div>
+        </nav>
+        <div class="sidebar-foot">
+          <div class="sidebar-foot-row"><span>Location</span><strong id="side-path" class="mono">—</strong></div>
+          <div class="sidebar-foot-row"><span>Free space</span><strong id="side-free">—</strong></div>
+        </div>
+      </aside>
+
+      <div class="main-col">
+        <header id="topbar">
+          <div class="nav-btns" role="group" aria-label="Navigation">
+            <button id="btn-back" class="icon-btn" type="button" title="Back (Alt+Left)" aria-label="Back"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg></button>
+            <button id="btn-forward" class="icon-btn" type="button" title="Forward (Alt+Right)" aria-label="Forward"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg></button>
+            <button id="btn-up" class="icon-btn" type="button" title="Up one folder (Alt+Up)" aria-label="Up one folder"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M3 8l5-5 5 5"/></svg></button>
+          </div>
+          <nav id="crumbs" class="crumbs" aria-label="Current folder"></nav>
+          <div class="topbar-search search-field">
+            <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.6 10.6L14 14"/></svg>
+            <input id="search" type="search" placeholder="Search this folder, Enter searches everywhere below" aria-label="Search" autocomplete="off" />
+          </div>
+          <button id="preview-toggle" class="btn btn-sm btn-outline" type="button" aria-pressed="false">Preview</button>
+          <button id="theme-toggle" class="btn btn-sm btn-outline" type="button">Light mode</button>
+        </header>
+
+        <div id="toolbar" role="toolbar" aria-label="File actions">
+          <button id="act-new-folder" class="btn btn-sm" type="button">New folder</button>
+          <button id="act-new-file" class="btn btn-sm" type="button">New file</button>
+          <span class="toolbar-sep" aria-hidden="true"></span>
+          <button id="act-cut" class="btn btn-sm" type="button" disabled>Cut</button>
+          <button id="act-copy" class="btn btn-sm" type="button" disabled>Copy</button>
+          <button id="act-paste" class="btn btn-sm" type="button" disabled>Paste</button>
+          <span class="toolbar-sep" aria-hidden="true"></span>
+          <button id="act-rename" class="btn btn-sm" type="button" disabled>Rename</button>
+          <button id="act-delete" class="btn btn-sm btn-danger" type="button" disabled>Delete</button>
+          <button id="act-props" class="btn btn-sm" type="button" disabled>Properties</button>
+          <span class="toolbar-spacer"></span>
+          <label class="check-label"><input id="show-hidden" type="checkbox" /> Hidden files</label>
+          <label class="sort-label" for="sort-key">Sort</label>
+          <select id="sort-key" aria-label="Sort by">
+            <option value="name" selected>Name</option>
+            <option value="size">Size</option>
+            <option value="modified">Date modified</option>
+            <option value="type">Type</option>
+          </select>
+          <div class="segmented" role="group" aria-label="View">
+            <button id="view-details" class="seg-btn is-active" type="button">Details</button>
+            <button id="view-icons" class="seg-btn" type="button">Icons</button>
+          </div>
+        </div>
+
+        <main id="canvas">
+          <div id="file-area">
+            <div id="loading" class="state-block" hidden>
+              <div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div>
+              <p class="status-line">Loading folder…</p>
+            </div>
+            <div id="empty" class="state-block" hidden>
+              <h2>This folder is empty</h2>
+              <p>Nothing here yet. Create a folder or paste files into it.</p>
+              <button id="empty-new-folder" class="btn btn-primary" type="button">New folder</button>
+            </div>
+            <div id="error" class="state-block" hidden>
+              <h2>Could not open this folder</h2>
+              <p id="error-text">—</p>
+              <button id="error-retry" class="btn btn-primary" type="button">Try again</button>
+            </div>
+            <div id="table-wrap" class="table-wrap">
+              <table id="file-table">
+                <thead>
+                  <tr>
+                    <th data-sort="name">Name</th>
+                    <th data-sort="modified">Date modified</th>
+                    <th data-sort="type">Type</th>
+                    <th data-sort="size" class="num">Size</th>
+                  </tr>
+                </thead>
+                <tbody id="file-body"></tbody>
+              </table>
+            </div>
+            <div id="grid-wrap" class="grid-wrap" hidden></div>
+          </div>
+          <aside id="preview" hidden aria-label="Preview">
+            <div class="panel-head"><h2 id="preview-title">Preview</h2><button id="preview-close" class="icon-btn" type="button" aria-label="Close preview"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button></div>
+            <div id="preview-body"></div>
+          </aside>
+        </main>
+
+        <footer id="statusbar">
+          <span id="status-count">—</span>
+          <span id="status-selection">—</span>
+          <span class="status-spacer"></span>
+          <span id="status-drive">—</span>
+        </footer>
+      </div>
+    </div>
+
+    <div id="ctx-menu" class="ctx-menu" role="menu" hidden></div>
+
+    <dialog id="dlg-rename" class="dialog">
+      <form method="dialog">
+        <h2>Rename</h2>
+        <label class="field-label" for="rename-input">New name</label>
+        <input id="rename-input" type="text" autocomplete="off" />
+        <p id="rename-error" class="field-error" hidden></p>
+        <div class="dialog-actions">
+          <button class="btn btn-outline" value="cancel" type="submit">Cancel</button>
+          <button id="rename-confirm" class="btn btn-primary" value="ok" type="submit">Rename</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-new" class="dialog">
+      <form method="dialog">
+        <h2 id="new-title">New folder</h2>
+        <label class="field-label" for="new-input">Name</label>
+        <input id="new-input" type="text" autocomplete="off" />
+        <p id="new-error" class="field-error" hidden></p>
+        <div class="dialog-actions">
+          <button class="btn btn-outline" value="cancel" type="submit">Cancel</button>
+          <button id="new-confirm" class="btn btn-primary" value="ok" type="submit">Create</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-delete" class="dialog">
+      <form method="dialog">
+        <h2>Move to Trash?</h2>
+        <p id="delete-text">—</p>
+        <div class="dialog-actions">
+          <button class="btn btn-outline" value="cancel" type="submit">Cancel</button>
+          <button id="delete-confirm" class="btn btn-danger" value="ok" type="submit">Move to Trash</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-props" class="dialog">
+      <form method="dialog">
+        <h2 id="props-title">Properties</h2>
+        <dl class="detail-grid" id="props-body"></dl>
+        <div class="dialog-actions">
+          <button class="btn btn-primary" value="ok" type="submit">Close</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
