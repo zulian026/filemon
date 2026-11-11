@@ -437,6 +437,9 @@ async function doRestore(): Promise<void> {
 async function doDeletePermanent(): Promise<void> {
   const paths = [...state.selection];
   if (paths.length === 0) return;
+  // The confirm button preventDefaults the form submit (which would close
+  // the dialog), so dismiss it here: confirming ends the dialog's job.
+  ($("dlg-delete") as HTMLDialogElement).close();
   try {
     const n = await invoke<number>("delete_trash", { paths });
     state.selection.clear();
@@ -448,6 +451,9 @@ async function doDeletePermanent(): Promise<void> {
 }
 
 async function doEmptyTrash(): Promise<void> {
+  // The confirm button preventDefaults the form submit (which would close
+  // the dialog), so dismiss it here: confirming ends the dialog's job.
+  ($("dlg-delete") as HTMLDialogElement).close();
   try {
     const n = await invoke<number>("empty_trash");
     state.selection.clear();
@@ -769,6 +775,8 @@ function renderSelection(): void {
   ($("act-delete-permanent") as HTMLButtonElement).hidden = !state.isTrash;
   ($("act-restore") as HTMLButtonElement).disabled = !has;
   ($("act-delete-permanent") as HTMLButtonElement).disabled = !has;
+  ($("act-empty-trash") as HTMLButtonElement).hidden = !state.isTrash;
+  ($("act-empty-trash") as HTMLButtonElement).disabled = state.entries.length === 0;
   for (const id of ["act-cut", "act-copy", "act-rename", "act-delete", "act-props"]) {
     ($ (id) as HTMLButtonElement).disabled = !has;
   }
@@ -1360,6 +1368,7 @@ async function init(): Promise<void> {
   $("act-props").addEventListener("click", () => void showProperties());
   $("act-restore").addEventListener("click", () => void doRestore());
   $("act-delete-permanent").addEventListener("click", askDelete);
+  $("act-empty-trash").addEventListener("click", askEmptyTrash);
 
   ($("show-hidden") as HTMLInputElement).addEventListener("change", (ev) => {
     state.showHidden = (ev.target as HTMLInputElement).checked;
