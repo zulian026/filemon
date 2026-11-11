@@ -1,4 +1,5 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 type Entry = {
   name: string;
@@ -210,7 +211,9 @@ function renderCrumbs(): void {
     b.type = "button";
     b.className = "crumb";
     b.textContent = label;
+    b.dataset.path = path;
     b.addEventListener("click", () => void navigate(path));
+    attachDropTarget(b, () => b.dataset.path ?? null);
     return b;
   };
   nav.appendChild(mk("This PC", "/"));
@@ -233,6 +236,10 @@ function renderTable(): void {
     const tr = document.createElement("tr");
     tr.dataset.path = e.path;
     if (state.selection.has(e.path)) tr.classList.add("is-selected");
+    tr.draggable = true;
+    tr.addEventListener("dragstart", (ev) => onDragStart(ev, e, tr));
+    tr.addEventListener("dragend", () => onDragEnd(tr));
+    if (e.is_dir) attachDropTarget(tr, () => e.path);
     const nameTd = document.createElement("td");
     // NB: .cell-name is display:flex — it must wrap the content in a div.
     // Putting it on the td itself turns the cell into a flex box, and
@@ -270,6 +277,10 @@ function renderGrid(): void {
     tile.type = "button";
     tile.className = "tile";
     if (state.selection.has(e.path)) tile.classList.add("is-selected");
+    tile.draggable = true;
+    tile.addEventListener("dragstart", (ev) => onDragStart(ev, e, tile));
+    tile.addEventListener("dragend", () => onDragEnd(tile));
+    if (e.is_dir) attachDropTarget(tile, () => e.path);
     tile.innerHTML = `${iconSvg(iconFor(e), "icon tile-icon")}<span class="tile-name">${escapeHtml(e.name)}</span>`;
     tile.addEventListener("click", (ev) => onRowClick(ev, e));
     tile.addEventListener("dblclick", () => void openEntry(e));
@@ -283,6 +294,104 @@ function renderGrid(): void {
       showContextMenu(ev.clientX, ev.clientY, e);
     });
     wrap.appendChild(tile);
+  }
+}
+
+/* ---- Drag & drop ---- */
+
+const DND_MIME = "application/x-filemon-paths";
+// Paths of the drag currently in flight (module state, not app state).
+// Needed because dataTransfer.getData is blocked during dragover.
+let dragPaths: string[] | null = null;
+let currentDropTarget: HTMLElement | null = null;
+
+function markDropTarget(el: HTMLElement | null): void {
+  if (currentDropTarget === el) return;
+  currentDropTarget?.classList.remove("drop-target");
+  currentDropTarget = el;
+  el?.classList.add("drop-target");
+}
+
+function isInternalDrag(ev: DragEvent): boolean {
+  if (dragPaths !== null) return true;
+  return Array.from(ev.dataTransfer?.types ?? []).includes(DND_MIME);
+}
+
+function dropPaths(ev: DragEvent): string[] | null {
+  const raw = ev.dataTransfer?.getData(DND_MIME);
+  if (raw) {
+    try {
+      const p: unknown = JSON.parse(raw);
+      if (Array.isArray(p)) return p as string[];
+    } catch {
+      /* fall through to module state */
+    }
+  }
+  return dragPaths;
+}
+
+function onDragStart(ev: DragEvent, e: Entry, el: HTMLElement): void {
+  // Explorer behaviour: dragging an unselected item drags just it (and selects it).
+  if (!state.selection.has(e.path)) {
+    state.selection.clear();
+    state.selection.add(e.path);
+    renderSelection();
+  }
+  dragPaths = [...state.selection];
+  if (ev.dataTransfer) {
+    ev.dataTransfer.setData(DND_MIME, JSON.stringify(dragPaths));
+    ev.dataTransfer.setData("text/plain", dragPaths.join("\n"));
+    ev.dataTransfer.effectAllowed = "copyMove";
+  }
+  el.classList.add("dragging");
+}
+
+function onDragEnd(el: HTMLElement): void {
+  dragPaths = null;
+  el.classList.remove("dragging");
+  markDropTarget(null);
+}
+
+/** Make an element a drop target for a folder: crumbs, sidebar items, folder rows/tiles. */
+function attachDropTarget(el: HTMLElement, getDest: () => string | null): void {
+  el.addEventListener("dragover", (ev) => {
+    if (!isInternalDrag(ev)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.dataTransfer!.dropEffect = ev.ctrlKey ? "copy" : "move";
+    markDropTarget(el);
+  });
+  el.addEventListener("drop", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    markDropTarget(null);
+    const dest = getDest();
+    const paths = dropPaths(ev);
+    if (!dest || !paths) return;
+    void performDrop(paths, dest, ev.ctrlKey);
+  });
+}
+
+async function performDrop(paths: string[], dest: string, copy: boolean): Promise<void> {
+  const parentOfPath = (p: string): string => {
+    const i = p.lastIndexOf("/");
+    return i <= 0 ? "/" : p.slice(0, i);
+  };
+  // A folder cannot be dropped into itself or one of its subfolders
+  // (copy_dir_recursive would recurse forever on that).
+  if (paths.some((p) => dest === p || dest.startsWith(p + "/"))) {
+    toast("Cannot move a folder into itself", true);
+    return;
+  }
+  const moving = paths.filter((p) => parentOfPath(p) !== dest);
+  if (moving.length === 0) return; // already in this folder — silent no-op
+  try {
+    const n = await invoke<number>(copy ? "copy_paths" : "move_paths", { paths: moving, dest });
+    state.selection.clear();
+    toast(`${n} item${n === 1 ? "" : "s"} ${copy ? "copied" : "moved"}`);
+    await loadDir();
+  } catch (err) {
+    toast(`Drop failed: ${err}`, true);
   }
 }
 
@@ -678,6 +787,7 @@ function renderSidebar(): void {
     b.className = "nav-item";
     b.innerHTML = `${iconSvg(ICONS.folder)}${label}`;
     b.addEventListener("click", () => void navigate(path));
+    attachDropTarget(b, () => path);
     quick.appendChild(b);
   }
   const dl = $("drive-list");
@@ -689,6 +799,7 @@ function renderSidebar(): void {
     b.innerHTML = `${iconSvg(ICONS.archive)}<span>${escapeHtml(d.name)}</span><span class="nav-meta">${fmtSize(d.free)} free</span>`;
     b.title = `${d.mount} · ${d.fs} · ${fmtSize(d.free)} free of ${fmtSize(d.total)}`;
     b.addEventListener("click", () => void navigate(d.mount));
+    attachDropTarget(b, () => d.mount);
     dl.appendChild(b);
   }
 }
@@ -829,6 +940,41 @@ async function init(): Promise<void> {
     ev.preventDefault();
     showContextMenu(ev.clientX, ev.clientY, null);
   });
+  // Drop onto the file area background = the current folder.
+  // (Rows/tiles stop propagation, so this only fires for empty space.)
+  const fileArea = $("file-area");
+  fileArea.addEventListener("dragover", (ev) => {
+    if (!isInternalDrag(ev)) return;
+    if ((ev.target as HTMLElement).closest("tbody tr, .tile")) return;
+    ev.preventDefault();
+    ev.dataTransfer!.dropEffect = ev.ctrlKey ? "copy" : "move";
+    markDropTarget(fileArea);
+  });
+  fileArea.addEventListener("drop", (ev) => {
+    ev.preventDefault();
+    markDropTarget(null);
+    const paths = dropPaths(ev);
+    if (!paths) return;
+    void performDrop(paths, state.path, ev.ctrlKey);
+  });
+  // Files dragged in from another app arrive as Tauri's built-in
+  // tauri://drag-* window events (no Rust code needed — drag-drop is on by
+  // default). They are copied into the current folder, never moved: the
+  // source app's intent is unknowable, so copy is the safe default.
+  void listen<{ paths: string[]; position: { x: number; y: number } }>("tauri://drag-drop", (ev) => {
+    $("drop-overlay").hidden = true;
+    void performDrop(ev.payload.paths, state.path, true);
+  });
+  void listen("tauri://drag-enter", () => {
+    ($("drop-overlay-path") as HTMLElement).textContent = state.path;
+    $("drop-overlay").hidden = false;
+  });
+  void listen("tauri://drag-leave", () => {
+    $("drop-overlay").hidden = true;
+  });
+  // Never let the webview navigate away when a file is dropped on it.
+  window.addEventListener("dragover", (ev) => ev.preventDefault());
+  window.addEventListener("drop", (ev) => ev.preventDefault());
   document.addEventListener("click", (ev) => {
     if (!(ev.target as HTMLElement).closest("#ctx-menu")) hideContextMenu();
   });

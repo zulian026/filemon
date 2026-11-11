@@ -39,6 +39,14 @@ body { font-size: var(--text-sm); line-height: 1.45; }
 .icon-btn:hover:not(:disabled) { background: var(--color-paper-3); color: var(--color-ink); }
 .icon-btn:disabled { background: var(--color-paper-3); color: var(--color-muted); cursor: default; }
 .icon-btn.is-active { background: var(--color-paper-3); color: var(--color-ink); box-shadow: inset 0 -2px 0 var(--color-accent); }
+
+/* Drag & drop */
+#file-body tr, .tile { user-select: none; }
+tr.dragging, .tile.dragging { opacity: 0.45; }
+.drop-target { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+#drop-overlay { position: fixed; inset: 0; z-index: var(--z-toast); display: flex; align-items: center; justify-content: center; background: var(--color-paper-2); background: color-mix(in srgb, var(--color-paper) 78%, transparent); border: 2px dashed var(--color-accent); pointer-events: none; }
+#drop-overlay[hidden] { display: none; }
+#drop-overlay p { font-size: var(--text-lg); color: var(--color-ink); }
 .crumbs { display: flex; align-items: center; gap: var(--space-3xs); flex: 1; min-width: 0; overflow-x: auto; padding: 0 var(--space-xs); }
 .crumb { background: none; border: none; border-radius: 0; color: var(--color-ink-2); cursor: pointer; padding: var(--space-2xs) var(--space-xs); white-space: nowrap; }
 .crumb:hover { background: var(--color-paper-3); color: var(--color-ink); }
