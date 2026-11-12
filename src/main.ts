@@ -828,6 +828,62 @@ function renderSelection(): void {
   void updatePreview();
 }
 
+// ---- Keyboard navigation (arrows move the selection, Enter opens) ----
+// The selection is a single entry after any arrow move; renderSelection()
+// updates the highlight, the toolbar, the status bar and the preview.
+
+function moveSelectionTo(index: number): void {
+  const list = state.filtered;
+  if (list.length === 0) return;
+  const i = Math.max(0, Math.min(list.length - 1, index));
+  state.selection.clear();
+  state.selection.add(list[i].path);
+  renderSelection();
+  scrollSelectedIntoView();
+}
+
+function moveSelection(delta: number): void {
+  const list = state.filtered;
+  if (list.length === 0) return;
+  const current = list.findIndex((e) => state.selection.has(e.path));
+  const next = current === -1 ? (delta > 0 ? 0 : list.length - 1) : current + delta;
+  moveSelectionTo(next);
+}
+
+function gridColumns(): number {
+  const tiles = [...document.querySelectorAll("#grid-wrap .tile")] as HTMLElement[];
+  if (tiles.length === 0) return 1;
+  const top = tiles[0].offsetTop;
+  let n = 0;
+  for (const t of tiles) {
+    if (t.offsetTop === top) n++;
+    else break;
+  }
+  return Math.max(1, n);
+}
+
+function pageStep(): number {
+  const area = $("file-area");
+  const first = (document.querySelector("#file-body tr") ??
+    document.querySelector("#grid-wrap .tile")) as HTMLElement | null;
+  const h = first ? first.offsetHeight : 32;
+  return Math.max(1, Math.floor(area.clientHeight / Math.max(1, h)));
+}
+
+function scrollSelectedIntoView(): void {
+  const path = state.selection.values().next().value;
+  if (!path) return;
+  for (const tr of document.querySelectorAll("#file-body tr")) {
+    if ((tr as HTMLTableRowElement).dataset.path === path) {
+      tr.scrollIntoView({ block: "nearest" });
+      return;
+    }
+  }
+  const idx = state.filtered.findIndex((e) => e.path === path);
+  const tile = document.querySelectorAll("#grid-wrap .tile")[idx] as HTMLElement | undefined;
+  tile?.scrollIntoView({ block: "nearest" });
+}
+
 function renderStatus(): void {
   const total = state.entries.length;
   const shown = state.filtered.length;
@@ -1579,6 +1635,22 @@ async function init(): Promise<void> {
     } else if (ev.key === "F2") {
       ev.preventDefault();
       askRename();
+    } else if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      const step = state.view === "icons" ? gridColumns() : 1;
+      moveSelection(ev.key === "ArrowDown" ? step : -step);
+    } else if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+      ev.preventDefault();
+      if (state.view === "icons") moveSelection(ev.key === "ArrowRight" ? 1 : -1);
+    } else if (ev.key === "Home") {
+      ev.preventDefault();
+      moveSelectionTo(0);
+    } else if (ev.key === "End") {
+      ev.preventDefault();
+      moveSelectionTo(state.filtered.length - 1);
+    } else if (ev.key === "PageDown" || ev.key === "PageUp") {
+      ev.preventDefault();
+      moveSelection(ev.key === "PageDown" ? pageStep() : -pageStep());
     } else if (ev.key === "Enter" && state.selection.size === 1) {
       const e = selectedEntries()[0];
       if (e) void openEntry(e);
