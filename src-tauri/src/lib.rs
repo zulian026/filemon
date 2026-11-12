@@ -90,6 +90,31 @@ fn path_exists(path: String) -> bool {
     fsops::path_exists(&PathBuf::from(path))
 }
 
+#[derive(serde::Serialize, Clone)]
+struct FolderSizePayload {
+    path: String,
+    size: u64,
+}
+
+/// Compute folder sizes in the background and emit one `folder-size` event
+/// per folder as it finishes. Returns at once; the walk runs on its own
+/// thread so a big folder never blocks the listing.
+#[tauri::command]
+fn folder_sizes(app: tauri::AppHandle, paths: Vec<String>) {
+    let want = fsops::FOLDER_SIZE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        for p in paths {
+            if fsops::FOLDER_SIZE_GEN.load(std::sync::atomic::Ordering::Relaxed) != want {
+                return;
+            }
+            let path = PathBuf::from(&p);
+            if let Ok(size) = fsops::folder_size(&path, &fsops::FOLDER_SIZE_GEN, want) {
+                let _ = app.emit("folder-size", FolderSizePayload { path: p, size });
+            }
+        }
+    });
+}
+
 #[tauri::command]
 fn start_transfer(
     app: tauri::AppHandle,
@@ -188,6 +213,7 @@ pub fn run() {
             open_path,
             open_terminal,
             path_exists,
+            folder_sizes,
             format_size
         ])
         .run(tauri::generate_context!())

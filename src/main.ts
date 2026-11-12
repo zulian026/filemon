@@ -107,6 +107,29 @@ const state = {
   pinned: [] as string[],
 };
 
+// Computed folder sizes for the current listing (path -> bytes). Filled in
+// asynchronously by the folder-size events; cleared on every loadDir so a
+// listing never shows a size computed for a previous state of the folder.
+const folderSizeCache = new Map<string, number>();
+
+function displaySize(e: Entry): string {
+  if (!e.is_dir) return fmtSize(e.size ?? 0);
+  const cached = folderSizeCache.get(e.path);
+  return cached === undefined ? "—" : fmtSize(cached);
+}
+
+async function requestFolderSizes(): Promise<void> {
+  const missing = state.filtered
+    .filter((e) => e.is_dir && !folderSizeCache.has(e.path))
+    .map((e) => e.path);
+  if (missing.length === 0) return;
+  try {
+    await invoke("folder_sizes", { paths: missing });
+  } catch {
+    // Sizes stay "—" until the next listing.
+  }
+}
+
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
 const TEXT_EXTS = new Set(["txt", "md", "rs", "py", "js", "ts", "json", "toml", "html", "css", "sh", "log", "csv"]);
 
@@ -638,7 +661,7 @@ function renderTable(): void {
     typeTd.textContent = kindLabel(e);
     const sizeTd = document.createElement("td");
     sizeTd.className = "num";
-    sizeTd.textContent = e.is_dir ? "—" : fmtSize(e.size ?? 0);
+    sizeTd.textContent = displaySize(e);
     tr.append(nameTd, modTd, typeTd, sizeTd);
     tr.addEventListener("click", (ev) => onRowClick(ev, e));
     tr.addEventListener("dblclick", (ev) => {
@@ -890,8 +913,10 @@ function renderSelection(): void {
     let files = 0;
     for (const p of state.selection) {
       const e = state.entries.find((x) => x.path === p);
-      if (e && e.size !== null) {
-        bytes += e.size;
+      if (!e) continue;
+      const sz = e.is_dir ? folderSizeCache.get(e.path) : e.size;
+      if (sz !== undefined && sz !== null) {
+        bytes += sz;
         files++;
       }
     }
@@ -1003,6 +1028,7 @@ function showState(which: "loading" | "empty" | "error" | "full"): void {
 }
 
 async function loadDir(): Promise<void> {
+  folderSizeCache.clear();
   showState("loading");
   try {
     const entries = state.isTrash
@@ -1022,6 +1048,7 @@ async function loadDir(): Promise<void> {
     }
     showState(state.filtered.length === 0 ? "empty" : "full");
     renderStatus();
+    void requestFolderSizes();
   } catch (err) {
     $("error-text").textContent = String(err);
     showState("error");
@@ -1677,6 +1704,19 @@ async function init(): Promise<void> {
     $("transfer-file").textContent = p.current;
     $("transfer-count").textContent = `${p.done_files} of ${p.total_files} files`;
     $("transfer-bytes").textContent = `${fmtSize(p.done_bytes)} of ${fmtSize(p.total_bytes)}`;
+  });
+  // A folder's size arrives after the listing: fill in its Size cell in
+  // place instead of re-rendering the whole list.
+  void listen<{ path: string; size: number }>("folder-size", (ev) => {
+    folderSizeCache.set(ev.payload.path, ev.payload.size);
+    for (const tr of document.querySelectorAll("#file-body tr")) {
+      if ((tr as HTMLTableRowElement).dataset.path === ev.payload.path) {
+        const cell = tr.querySelector("td.num");
+        if (cell) cell.textContent = fmtSize(ev.payload.size);
+        break;
+      }
+    }
+    if (state.selection.has(ev.payload.path)) renderSelection();
   });
   $("transfer-cancel").addEventListener("click", () => {
     ($("transfer-cancel") as HTMLButtonElement).disabled = true;

@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Entry {
@@ -993,6 +993,47 @@ pub fn path_exists(path: &Path) -> bool {
     path.exists()
 }
 
+// ---- Folder sizes ----
+// One generation per folder_sizes request; a newer request makes older walks
+// give up, so fast navigation through big folders does not pile up work.
+pub static FOLDER_SIZE_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// Recursive size of a folder: the sum of all file sizes under it.
+/// Symlinks are not followed at all — a link back to a parent would loop
+/// forever and a link to a sibling would double-count its files. Unreadable
+/// subdirectories are skipped. `gen`/`want` abort the walk when a newer
+/// request supersedes this one (checked every 1024 entries).
+pub fn folder_size(path: &Path, gen: &AtomicU64, want: u64) -> Result<u64, String> {
+    let mut total: u64 = 0;
+    let mut stack: Vec<PathBuf> = vec![path.to_path_buf()];
+    let mut checked: u64 = 0;
+    while let Some(dir) = stack.pop() {
+        let rd = match fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(_) => continue,
+        };
+        for entry in rd.flatten() {
+            checked += 1;
+            if checked % 1024 == 0 && gen.load(Ordering::Relaxed) != want {
+                return Err("cancelled".to_string());
+            }
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if let Ok(md) = entry.metadata() {
+                total = total.saturating_add(md.len());
+            }
+        }
+    }
+    Ok(total)
+}
+
 // ---- Open in Terminal ----
 // Terminals are tried in order; every one of them starts its shell in the
 // inherited working directory, so no per-terminal --working-directory flag
@@ -1201,6 +1242,40 @@ mod tests {
         fs::create_dir_all(&base).unwrap();
         assert!(path_exists(&base));
         assert!(!path_exists(&base.join("nope")));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn folder_size_sums_nested_tree() {
+        let base = std::env::temp_dir().join("filemon-test-fsize");
+        let _ = fs::remove_dir_all(&base);
+        let sub = base.join("sub");
+        fs::create_dir_all(sub.join("empty")).unwrap();
+        fs::write(base.join("a.txt"), vec![0u8; 10]).unwrap();
+        fs::write(sub.join("b.txt"), vec![0u8; 20]).unwrap();
+        let gen = AtomicU64::new(0);
+        assert_eq!(folder_size(&base, &gen, 0).unwrap(), 30);
+        assert_eq!(folder_size(&sub, &gen, 0).unwrap(), 20);
+        assert_eq!(folder_size(&sub.join("empty"), &gen, 0).unwrap(), 0);
+        assert!(folder_size(&base.join("nope"), &gen, 0).is_ok());
+        // A symlink back to the parent must not loop or double-count.
+        std::os::unix::fs::symlink(&base, sub.join("loop")).unwrap();
+        assert_eq!(folder_size(&base, &gen, 0).unwrap(), 30);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn folder_size_cancel_stops_a_big_walk() {
+        let base = std::env::temp_dir().join("filemon-test-fsize-cancel");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        for i in 0..1100 {
+            fs::write(base.join(format!("f{}.txt", i)), b"x").unwrap();
+        }
+        // The generation already moved on before the walk starts.
+        let gen = AtomicU64::new(1);
+        let err = folder_size(&base, &gen, 0).unwrap_err();
+        assert_eq!(err, "cancelled");
         let _ = fs::remove_dir_all(&base);
     }
 
