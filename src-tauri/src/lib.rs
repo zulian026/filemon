@@ -86,6 +86,11 @@ fn open_terminal(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn path_exists(path: String) -> bool {
+    fsops::path_exists(&PathBuf::from(path))
+}
+
+#[tauri::command]
 fn start_transfer(
     app: tauri::AppHandle,
     paths: Vec<String>,
@@ -182,6 +187,7 @@ pub fn run() {
             read_text,
             open_path,
             open_terminal,
+            path_exists,
             format_size
         ])
         .run(tauri::generate_context!())

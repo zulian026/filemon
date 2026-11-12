@@ -31,6 +31,7 @@ window.__TAURI_INTERNALS__ = {
     }
     if (cmd === "delete_paths") return 1;
     if (cmd === "open_terminal") return null;
+    if (cmd === "path_exists") return true;
     if (cmd === "list_trash") return [
       { name: "notes.txt", path: "/home/zyan/.local/share/Trash/files/notes.txt", is_dir: false, is_symlink: false, size: 120, modified: 1793000000, extension: "txt", hidden: false, original_path: "/home/zyan/notes.txt" },
       { name: "tree", path: "/home/zyan/.local/share/Trash/files/tree", is_dir: true, is_symlink: false, size: 1, modified: 1792000000, extension: null, hidden: false, original_path: "/home/zyan/tree" }

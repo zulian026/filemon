@@ -988,6 +988,11 @@ pub fn open_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Does this path exist? Used to prune Quick-access pins whose folder is gone.
+pub fn path_exists(path: &Path) -> bool {
+    path.exists()
+}
+
 // ---- Open in Terminal ----
 // Terminals are tried in order; every one of them starts its shell in the
 // inherited working directory, so no per-terminal --working-directory flag
@@ -1186,6 +1191,17 @@ mod tests {
     fn open_terminal_rejects_missing_dir() {
         let err = open_terminal(Path::new("/definitely/not/a/real/folder")).unwrap_err();
         assert!(err.contains("Not a folder"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn path_exists_roundtrip() {
+        let base = std::env::temp_dir().join("filemon-test-exists");
+        let _ = fs::remove_dir_all(&base);
+        assert!(!path_exists(&base));
+        fs::create_dir_all(&base).unwrap();
+        assert!(path_exists(&base));
+        assert!(!path_exists(&base.join("nope")));
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

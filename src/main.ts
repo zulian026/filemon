@@ -104,6 +104,7 @@ const state = {
   drives: [] as Drive[],
   previewOpen: false,
   homeDir: "",
+  pinned: [] as string[],
 };
 
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
@@ -313,6 +314,77 @@ function restoreTabs(home: string): void {
   }));
   const active = Number(localStorage.getItem("filemon-active-tab") ?? "0");
   state.activeTab = active >= 0 && active < state.tabs.length ? active : 0;
+}
+
+// ---- Pin folders to Quick access ----
+const PINNED_KEY = "filemon-pinned";
+
+function baseName(p: string): string {
+  const parts = p.split("/").filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : p;
+}
+
+function builtinPlaces(): [string, string][] {
+  const homeDir = state.homeDir;
+  return [
+    ["Home", homeDir],
+    ["Desktop", `${homeDir}/Desktop`],
+    ["Documents", `${homeDir}/Documents`],
+    ["Downloads", `${homeDir}/Downloads`],
+    ["Pictures", `${homeDir}/Pictures`],
+    ["Music", `${homeDir}/Music`],
+    ["Videos", `${homeDir}/Videos`],
+  ];
+}
+
+function isBuiltinPlace(path: string): boolean {
+  return builtinPlaces().some(([, p]) => p === path);
+}
+
+function isPinned(path: string): boolean {
+  return state.pinned.includes(path);
+}
+
+function loadPins(): void {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PINNED_KEY) ?? "[]");
+    if (Array.isArray(raw)) {
+      state.pinned = [...new Set(raw.filter((p) => typeof p === "string" && p.startsWith("/")))];
+    }
+  } catch {
+    state.pinned = [];
+  }
+}
+
+function savePins(): void {
+  localStorage.setItem(PINNED_KEY, JSON.stringify(state.pinned));
+}
+
+function togglePin(path: string): void {
+  if (isPinned(path)) {
+    state.pinned = state.pinned.filter((p) => p !== path);
+  } else if (!isBuiltinPlace(path)) {
+    state.pinned = [...state.pinned, path];
+  } else {
+    return;
+  }
+  savePins();
+  renderSidebar();
+}
+
+async function prunePins(): Promise<void> {
+  const kept: string[] = [];
+  for (const p of state.pinned) {
+    try {
+      if (await invoke<boolean>("path_exists", { path: p })) kept.push(p);
+    } catch {
+      kept.push(p);
+    }
+  }
+  if (kept.length !== state.pinned.length) {
+    state.pinned = kept;
+    savePins();
+  }
 }
 
 function renderTabs(): void {
@@ -1233,40 +1305,13 @@ function setPreview(open: boolean): void {
   if (open) void updatePreview();
 }
 
-function showContextMenu(x: number, y: number, target: Entry | null): void {
+function showMenuAt(
+  x: number,
+  y: number,
+  items: { label: string; disabled?: boolean; action: () => void | Promise<void> }[],
+): void {
   const menu = $("ctx-menu");
   menu.innerHTML = "";
-  const items: { label: string; disabled?: boolean; action: () => void | Promise<void> }[] = [];
-  if (state.isTrash) {
-    if (target) {
-      items.push({ label: "Restore", action: () => void doRestore() });
-      items.push({ label: "Delete permanently", action: askDelete });
-    } else {
-      items.push({ label: "Empty Trash", disabled: state.entries.length === 0, action: askEmptyTrash });
-    }
-  } else if (target) {
-    items.push({ label: "Open", action: () => void openEntry(target) });
-    if (target.is_dir) items.push({ label: "Open in new tab", action: () => void openInNewTab(target.path) });
-    items.push({
-      label: "Open in Terminal",
-      action: () =>
-        void doOpenTerminal(target.is_dir ? target.path : (parentOf(target.path) ?? state.path)),
-    });
-    items.push({ label: "Copy", action: () => void doCopyCut("copy") });
-    items.push({ label: "Cut", action: () => void doCopyCut("cut") });
-    items.push({ label: "Compress to ZIP", action: () => void doCompress() });
-    if (state.selection.size === 1 && (target.extension ?? "").toLowerCase() === "zip") {
-      items.push({ label: "Extract here", action: () => void doExtract() });
-    }
-    items.push({ label: "Rename", disabled: state.selection.size !== 1, action: askRename });
-    items.push({ label: "Delete", action: askDelete });
-    items.push({ label: "Properties", disabled: state.selection.size !== 1, action: () => void showProperties() });
-  } else {
-    items.push({ label: "Open in Terminal", action: () => void doOpenTerminal(state.path) });
-    items.push({ label: "New folder", action: () => askNew("folder") });
-    items.push({ label: "New file", action: () => askNew("file") });
-    items.push({ label: "Paste", disabled: state.clipboard === null, action: () => void doPaste() });
-  }
   for (const item of items) {
     const b = document.createElement("button");
     b.type = "button";
@@ -1284,6 +1329,57 @@ function showContextMenu(x: number, y: number, target: Entry | null): void {
   const rect = menu.getBoundingClientRect();
   menu.style.left = `${Math.min(x, window.innerWidth - rect.width - 8)}px`;
   menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 8)}px`;
+}
+
+function showPinMenu(x: number, y: number, path: string): void {
+  showMenuAt(x, y, [{ label: "Unpin from Quick access", action: () => togglePin(path) }]);
+}
+
+function showContextMenu(x: number, y: number, target: Entry | null): void {
+  const items: { label: string; disabled?: boolean; action: () => void | Promise<void> }[] = [];
+  if (state.isTrash) {
+    if (target) {
+      items.push({ label: "Restore", action: () => void doRestore() });
+      items.push({ label: "Delete permanently", action: askDelete });
+    } else {
+      items.push({ label: "Empty Trash", disabled: state.entries.length === 0, action: askEmptyTrash });
+    }
+  } else if (target) {
+    items.push({ label: "Open", action: () => void openEntry(target) });
+    if (target.is_dir) items.push({ label: "Open in new tab", action: () => void openInNewTab(target.path) });
+    items.push({
+      label: "Open in Terminal",
+      action: () =>
+        void doOpenTerminal(target.is_dir ? target.path : (parentOf(target.path) ?? state.path)),
+    });
+    if (target.is_dir && !isBuiltinPlace(target.path)) {
+      items.push({
+        label: isPinned(target.path) ? "Unpin from Quick access" : "Pin to Quick access",
+        action: () => togglePin(target.path),
+      });
+    }
+    items.push({ label: "Copy", action: () => void doCopyCut("copy") });
+    items.push({ label: "Cut", action: () => void doCopyCut("cut") });
+    items.push({ label: "Compress to ZIP", action: () => void doCompress() });
+    if (state.selection.size === 1 && (target.extension ?? "").toLowerCase() === "zip") {
+      items.push({ label: "Extract here", action: () => void doExtract() });
+    }
+    items.push({ label: "Rename", disabled: state.selection.size !== 1, action: askRename });
+    items.push({ label: "Delete", action: askDelete });
+    items.push({ label: "Properties", disabled: state.selection.size !== 1, action: () => void showProperties() });
+  } else {
+    items.push({ label: "Open in Terminal", action: () => void doOpenTerminal(state.path) });
+    if (!isBuiltinPlace(state.path)) {
+      items.push({
+        label: isPinned(state.path) ? "Unpin this folder from Quick access" : "Pin this folder to Quick access",
+        action: () => togglePin(state.path),
+      });
+    }
+    items.push({ label: "New folder", action: () => askNew("folder") });
+    items.push({ label: "New file", action: () => askNew("file") });
+    items.push({ label: "Paste", disabled: state.clipboard === null, action: () => void doPaste() });
+  }
+  showMenuAt(x, y, items);
 }
 
 function hideContextMenu(): void {
@@ -1335,22 +1431,27 @@ function updateTrashNav(): void {
 function renderSidebar(): void {
   const quick = $("quick-list");
   quick.innerHTML = "";
-  const homeDir = state.homeDir;
-  const places: [string, string][] = [
-    ["Home", homeDir],
-    ["Desktop", `${homeDir}/Desktop`],
-    ["Documents", `${homeDir}/Documents`],
-    ["Downloads", `${homeDir}/Downloads`],
-    ["Pictures", `${homeDir}/Pictures`],
-    ["Music", `${homeDir}/Music`],
-    ["Videos", `${homeDir}/Videos`],
-  ];
-  for (const [label, path] of places) {
+  for (const [label, path] of builtinPlaces()) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "nav-item";
     b.innerHTML = `${iconSvg(ICONS.folder)}${label}`;
     b.addEventListener("click", () => void navigate(path));
+    attachDropTarget(b, () => path);
+    quick.appendChild(b);
+  }
+  for (const path of state.pinned) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "nav-item";
+    b.dataset.path = path;
+    b.title = path;
+    b.innerHTML = `${iconSvg(ICONS.folder)}${escapeHtml(baseName(path))}`;
+    b.addEventListener("click", () => void navigate(path));
+    b.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      showPinMenu(ev.clientX, ev.clientY, path);
+    });
     attachDropTarget(b, () => path);
     quick.appendChild(b);
   }
@@ -1401,6 +1502,8 @@ async function init(): Promise<void> {
   }
   const home = await invoke<string>("get_home");
   state.homeDir = home;
+  loadPins();
+  await prunePins();
   state.drives = await invoke<Drive[]>("get_drives");
   renderSidebar();
   restoreTabs(home);
