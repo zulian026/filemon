@@ -937,6 +937,14 @@ function selectedEntries(): Entry[] {
   return state.entries.filter((e) => state.selection.has(e.path));
 }
 
+async function doOpenTerminal(dir: string): Promise<void> {
+  try {
+    await invoke("open_terminal", { path: dir });
+  } catch (err) {
+    toast(`Could not open terminal: ${err}`, true);
+  }
+}
+
 async function doCopyCut(mode: "copy" | "cut"): Promise<void> {
   const paths = [...state.selection];
   if (paths.length === 0) return;
@@ -1183,6 +1191,11 @@ function showContextMenu(x: number, y: number, target: Entry | null): void {
   } else if (target) {
     items.push({ label: "Open", action: () => void openEntry(target) });
     if (target.is_dir) items.push({ label: "Open in new tab", action: () => void openInNewTab(target.path) });
+    items.push({
+      label: "Open in Terminal",
+      action: () =>
+        void doOpenTerminal(target.is_dir ? target.path : (parentOf(target.path) ?? state.path)),
+    });
     items.push({ label: "Copy", action: () => void doCopyCut("copy") });
     items.push({ label: "Cut", action: () => void doCopyCut("cut") });
     items.push({ label: "Compress to ZIP", action: () => void doCompress() });
@@ -1193,6 +1206,7 @@ function showContextMenu(x: number, y: number, target: Entry | null): void {
     items.push({ label: "Delete", action: askDelete });
     items.push({ label: "Properties", disabled: state.selection.size !== 1, action: () => void showProperties() });
   } else {
+    items.push({ label: "Open in Terminal", action: () => void doOpenTerminal(state.path) });
     items.push({ label: "New folder", action: () => askNew("folder") });
     items.push({ label: "New file", action: () => askNew("file") });
     items.push({ label: "Paste", disabled: state.clipboard === null, action: () => void doPaste() });

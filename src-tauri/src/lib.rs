@@ -81,6 +81,11 @@ fn open_path(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_terminal(path: String) -> Result<(), String> {
+    fsops::open_terminal(&PathBuf::from(path))
+}
+
+#[tauri::command]
 fn start_transfer(
     app: tauri::AppHandle,
     paths: Vec<String>,
@@ -176,6 +181,7 @@ pub fn run() {
             get_properties,
             read_text,
             open_path,
+            open_terminal,
             format_size
         ])
         .run(tauri::generate_context!())

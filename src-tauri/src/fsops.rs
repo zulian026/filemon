@@ -988,6 +988,78 @@ pub fn open_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+// ---- Open in Terminal ----
+// Terminals are tried in order; every one of them starts its shell in the
+// inherited working directory, so no per-terminal --working-directory flag
+// is needed (and a wrong flag would break the launch outright).
+
+const TERMINAL_CANDIDATES: &[&str] = &[
+    "foot",
+    "alacritty",
+    "kitty",
+    "wezterm",
+    "ghostty",
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "ptyxis",
+    "blackbox",
+    "xterm",
+];
+
+/// Resolve (binary, extra args) for the terminal to launch. Pure over its
+/// inputs so tests can pass a fake PATH without touching the environment.
+/// $TERMINAL wins when set (it may carry its own args: "foot --app-id x").
+fn find_terminal_in(path_var: &str, terminal_var: Option<&str>) -> Option<(String, Vec<String>)> {
+    if let Some(t) = terminal_var {
+        let mut parts = t.split_whitespace();
+        if let Some(bin) = parts.next() {
+            return Some((bin.to_string(), parts.map(|s| s.to_string()).collect()));
+        }
+    }
+    for dir in path_var.split(':') {
+        if dir.is_empty() {
+            continue;
+        }
+        for name in TERMINAL_CANDIDATES {
+            let p = Path::new(dir).join(name);
+            if p.is_file() {
+                return Some((name.to_string(), Vec::new()));
+            }
+        }
+    }
+    None
+}
+
+fn find_terminal() -> Option<(String, Vec<String>)> {
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    let terminal_var = std::env::var("TERMINAL").ok();
+    find_terminal_in(&path_var, terminal_var.as_deref())
+}
+
+/// Open a terminal emulator with its working directory at `path`. The child
+/// is detached (its own process group, null stdio) so it outlives FileMon
+/// and never inherits its pipes.
+pub fn open_terminal(path: &Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(format!("Not a folder: {}", path.display()));
+    }
+    let (bin, args) = find_terminal().ok_or_else(|| {
+        "No terminal found (tried $TERMINAL, then foot, alacritty, kitty, wezterm, ghostty, gnome-terminal, konsole, xfce4-terminal, ptyxis, blackbox, xterm)".to_string()
+    })?;
+    use std::os::unix::process::CommandExt;
+    std::process::Command::new(&bin)
+        .args(&args)
+        .current_dir(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| format!("Could not launch {}: {}", bin, e))?;
+    Ok(())
+}
+
 /// Human size: 0 B, 1.5 KB, 2.0 MB, 3.4 GB. Binary units, one decimal.
 pub fn format_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
@@ -1079,6 +1151,41 @@ mod tests {
         assert_eq!(props.size, 2);
         assert_eq!(props.kind, "Text file");
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn find_terminal_probe_order() {
+        let base = std::env::temp_dir().join("filemon-test-term");
+        let _ = fs::remove_dir_all(&base);
+        let bin = base.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        // Only kitty exists: it is picked. Add foot later: foot wins (first).
+        File::create(bin.join("kitty")).unwrap();
+        assert_eq!(
+            find_terminal_in(&bin.to_string_lossy(), None),
+            Some(("kitty".to_string(), vec![]))
+        );
+        File::create(bin.join("foot")).unwrap();
+        assert_eq!(
+            find_terminal_in(&bin.to_string_lossy(), None),
+            Some(("foot".to_string(), vec![]))
+        );
+        // $TERMINAL wins over everything on PATH, args split out.
+        assert_eq!(
+            find_terminal_in(&bin.to_string_lossy(), Some("myterm --app-id x")),
+            Some(("myterm".to_string(), vec!["--app-id".to_string(), "x".to_string()]))
+        );
+        // Nothing on PATH, no $TERMINAL: no terminal.
+        let empty = base.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        assert_eq!(find_terminal_in(&empty.to_string_lossy(), None), None);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn open_terminal_rejects_missing_dir() {
+        let err = open_terminal(Path::new("/definitely/not/a/real/folder")).unwrap_err();
+        assert!(err.contains("Not a folder"), "unexpected error: {}", err);
     }
 
     #[test]
