@@ -164,6 +164,256 @@ pub fn search(root: &Path, query: &str, max_results: usize) -> Vec<Entry> {
     hits
 }
 
+/// One content hit: the first matching line of a file, with its text.
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct ContentMatch {
+    pub entry: Entry,
+    pub line: u32,
+    pub snippet: String,
+}
+
+fn looks_binary(sample: &[u8]) -> bool {
+    sample.iter().take(8192).any(|&b| b == 0)
+}
+
+/// Recursive content search under `root`: case-insensitive substring match
+/// on text lines. Bounds match name search (depth 10, 20 000 visited dirs),
+/// plus: files over 1 MB are skipped, binary files (NUL in the first 8 KB)
+/// are skipped, one hit (the first matching line) per file.
+pub fn search_content(root: &Path, query: &str, max_results: usize) -> Vec<ContentMatch> {
+    let q = query.to_lowercase();
+    let mut hits = Vec::new();
+    let mut queue: VecDeque<(PathBuf, u8)> = VecDeque::from([(root.to_path_buf(), 0)]);
+    let mut visited = 0usize;
+    while let Some((dir, depth)) = queue.pop_front() {
+        if hits.len() >= max_results || visited > 20_000 {
+            break;
+        }
+        visited += 1;
+        let Ok(rd) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for item in rd.flatten() {
+            if hits.len() >= max_results {
+                break;
+            }
+            let p = item.path();
+            let Ok(md) = fs::metadata(&p) else {
+                continue;
+            };
+            let e = entry_from(&p, &md);
+            if e.is_dir {
+                if depth < 10 && !e.hidden {
+                    queue.push_back((p, depth + 1));
+                }
+                continue;
+            }
+            if e.size.unwrap_or(0) > 1024 * 1024 {
+                continue;
+            }
+            let Ok(bytes) = fs::read(&p) else {
+                continue;
+            };
+            if looks_binary(&bytes) {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&bytes);
+            for (i, line) in text.lines().enumerate() {
+                if line.to_lowercase().contains(&q) {
+                    let snippet: String = line.trim().chars().take(120).collect();
+                    hits.push(ContentMatch {
+                        entry: e,
+                        line: (i + 1) as u32,
+                        snippet,
+                    });
+                    break;
+                }
+            }
+        }
+    }
+    hits
+}
+
+/// One group of files with identical content.
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct DupeGroup {
+    pub size: u64,
+    pub entries: Vec<Entry>,
+}
+
+fn file_hash(path: &Path) -> Option<u64> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher;
+    let mut f = fs::File::open(path).ok()?;
+    let mut hasher = DefaultHasher::new();
+    let mut buf = [0u8; 65536];
+    use std::io::Read;
+    loop {
+        let n = f.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.write(&buf[..n]);
+    }
+    Some(hasher.finish())
+}
+
+fn files_identical(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    let mut fa = match fs::File::open(a) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut fb = match fs::File::open(b) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut ba = [0u8; 65536];
+    let mut bb = [0u8; 65536];
+    loop {
+        let na = match fa.read(&mut ba) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        let nb = match fb.read(&mut bb) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if na != nb || ba[..na] != bb[..nb] {
+            return false;
+        }
+        if na == 0 {
+            return true;
+        }
+    }
+}
+
+/// Find duplicate files under `root`, grouped by identical content.
+/// Walk bounds match name search; empty files are excluded (every empty
+/// file would "duplicate" every other); files over 200 MB are skipped.
+/// Grouping is size → hash → byte comparison, so a hash collision alone
+/// can never report a false duplicate.
+/// Folder comparison for dual pane: names matched at the top level only.
+/// Same-name files are "same" when size and content hash match; folders
+/// with the same name are not recursed into (they count as same). Hidden
+/// entries are included only when `include_hidden` is set.
+#[derive(Debug, Clone, Serialize)]
+pub struct CompareResult {
+    pub only_a: Vec<Entry>,
+    pub only_b: Vec<Entry>,
+    pub different: Vec<Entry>,
+    pub same: usize,
+}
+
+pub fn compare_dirs(a: &Path, b: &Path, include_hidden: bool) -> Result<CompareResult, String> {
+    let la = list_dir(a)?;
+    let lb = list_dir(b)?;
+    let la: Vec<Entry> = la.into_iter().filter(|e| include_hidden || !e.hidden).collect();
+    let lb: Vec<Entry> = lb.into_iter().filter(|e| include_hidden || !e.hidden).collect();
+    let mut by_name_b: std::collections::HashMap<&str, &Entry> = std::collections::HashMap::new();
+    for e in &lb {
+        by_name_b.insert(e.name.as_str(), e);
+    }
+    let mut only_a = Vec::new();
+    let mut different = Vec::new();
+    let mut same = 0usize;
+    for ea in &la {
+        match by_name_b.get(ea.name.as_str()) {
+            None => only_a.push(ea.clone()),
+            Some(eb) => {
+                if ea.is_dir && eb.is_dir {
+                    same += 1;
+                } else if ea.is_dir != eb.is_dir {
+                    different.push(ea.clone());
+                } else if ea.size == eb.size && file_hash(Path::new(&ea.path)) == file_hash(Path::new(&eb.path)) {
+                    same += 1;
+                } else {
+                    different.push(ea.clone());
+                }
+            }
+        }
+    }
+    let names_a: std::collections::HashSet<&str> = la.iter().map(|e| e.name.as_str()).collect();
+    let only_b: Vec<Entry> = lb.into_iter().filter(|e| !names_a.contains(e.name.as_str())).collect();
+    Ok(CompareResult { only_a, only_b, different, same })
+}
+
+pub fn find_duplicates(root: &Path) -> Vec<DupeGroup> {
+    let mut by_size: std::collections::HashMap<u64, Vec<PathBuf>> = std::collections::HashMap::new();
+    let mut queue: VecDeque<(PathBuf, u8)> = VecDeque::from([(root.to_path_buf(), 0)]);
+    let mut visited = 0usize;
+    while let Some((dir, depth)) = queue.pop_front() {
+        if visited > 20_000 {
+            break;
+        }
+        visited += 1;
+        let Ok(rd) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for item in rd.flatten() {
+            let p = item.path();
+            let Ok(md) = fs::metadata(&p) else {
+                continue;
+            };
+            let e = entry_from(&p, &md);
+            if e.is_dir {
+                if depth < 10 && !e.hidden {
+                    queue.push_back((p, depth + 1));
+                }
+                continue;
+            }
+            let size = e.size.unwrap_or(0);
+            if size == 0 || size > 200 * 1024 * 1024 {
+                continue;
+            }
+            by_size.entry(size).or_default().push(p);
+        }
+    }
+    let mut groups = Vec::new();
+    for (size, paths) in by_size {
+        if paths.len() < 2 {
+            continue;
+        }
+        let mut by_hash: std::collections::HashMap<u64, Vec<PathBuf>> = std::collections::HashMap::new();
+        for p in paths {
+            if let Some(h) = file_hash(&p) {
+                by_hash.entry(h).or_default().push(p);
+            }
+        }
+        for (_, hpaths) in by_hash {
+            if hpaths.len() < 2 {
+                continue;
+            }
+            // Verify byte-for-byte against the first file of the hash group.
+            let first = &hpaths[0];
+            let mut confirmed: Vec<Entry> = Vec::new();
+            if let Ok(md) = fs::metadata(first) {
+                confirmed.push(entry_from(first, &md));
+            }
+            for p in &hpaths[1..] {
+                if files_identical(first, p) {
+                    if let Ok(md) = fs::metadata(p) {
+                        confirmed.push(entry_from(p, &md));
+                    }
+                }
+            }
+            if confirmed.len() > 1 {
+                confirmed.sort_by(|a, b| a.path.cmp(&b.path));
+                groups.push(DupeGroup {
+                    size,
+                    entries: confirmed,
+                });
+            }
+        }
+    }
+    groups.sort_by(|a, b| {
+        b.size
+            .cmp(&a.size)
+            .then_with(|| a.entries[0].path.cmp(&b.entries[0].path))
+    });
+    groups
+}
+
 /// A name that does not collide inside `dir`: "name", "name (2)", "name (3)".
 /// The "(copy)" suffix is applied by the caller before this runs.
 pub fn unique_name(dir: &Path, base: &str) -> String {
@@ -974,10 +1224,202 @@ pub fn properties(path: &Path) -> Result<Properties, String> {
     })
 }
 
+/// One entry inside an archive (zip or tar family), for the preview pane.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArchiveEntry {
+    pub name: String,
+    pub size: Option<u64>,
+    pub is_dir: bool,
+}
+
+/// List an archive's contents without extracting it. .zip is read with the
+/// zip crate; the tar family (tar/tgz/tar.gz/tar.xz/tar.bz2) goes through
+/// the system tar. A plain .gz (not a tar) and anything unreadable errors,
+/// and the caller falls back to the generic summary. Capped at 300 entries.
+pub fn list_archive(path: &Path) -> Result<Vec<ArchiveEntry>, String> {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let name = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if ext == "zip" {
+        let file = fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for i in 0..archive.len().min(300) {
+            let entry = archive.by_index(i).map_err(|e| e.to_string())?;
+            out.push(ArchiveEntry {
+                name: entry.name().to_string(),
+                size: Some(entry.size()),
+                is_dir: entry.is_dir(),
+            });
+        }
+        return Ok(out);
+    }
+    let flag = if ext == "tar" {
+        "-tf"
+    } else if ext == "tgz" || name.ends_with(".tar.gz") {
+        "-tzf"
+    } else if name.ends_with(".tar.xz") {
+        "-tJf"
+    } else if name.ends_with(".tar.bz2") {
+        "-tjf"
+    } else {
+        return Err("unsupported archive type".to_string());
+    };
+    let out = std::process::Command::new("tar")
+        .arg(flag)
+        .arg(path)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    Ok(text
+        .lines()
+        .take(300)
+        .map(|l| ArchiveEntry {
+            is_dir: l.ends_with('/'),
+            name: l.to_string(),
+            size: None,
+        })
+        .collect())
+}
+
+/// SHA-256 of a file via the system sha256sum (coreutils, always present).
+/// The hash is shown in Properties; same input always yields the same hex.
+pub fn file_sha256(path: &Path) -> Result<String, String> {
+    let out = std::process::Command::new("sha256sum")
+        .arg(path)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.split_whitespace()
+        .next()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "sha256sum produced no output".to_string())
+}
+
+/// Change a file or folder's permission bits (0o000–0o7777). Returns the new
+/// octal mode string as shown in Properties.
+pub fn set_permissions(path: &Path, mode: u32) -> Result<String, String> {
+    if mode > 0o7777 {
+        return Err("mode out of range (0o000–0o7777)".to_string());
+    }
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())?;
+    Ok(format!("{:o}", mode & 0o7777))
+}
+
 pub fn read_text(path: &Path, max_bytes: usize) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
     let end = bytes.len().min(max_bytes);
     Ok(String::from_utf8_lossy(&bytes[..end]).into_owned())
+}
+
+/// First frame of a video file, or a downscaled image, as a base64 PNG —
+/// cached on disk so a folder revisited does not regenerate its thumbnails.
+/// Cache: $XDG_CACHE_HOME/filemon/thumbs (else ~/.cache), one PNG per
+/// source file, keyed by path + size + mtime. A cached PNG is used only
+/// when it is at least as new as the source file, so an edited image or a
+/// replaced video re-renders. Images go through the image crate; video
+/// goes through ffmpeg (a <video> element is not an option: this WebKitGTK
+/// crashes its web process on any <video> load — GStreamer autoaudiosink
+/// is missing on the system). SVG has no Rust decoder here, so the frontend
+/// keeps loading it directly via the asset protocol.
+pub fn thumb_cache_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("FILEMON_THUMB_CACHE") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
+    if let Ok(dir) = std::env::var("XDG_CACHE_HOME") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir).join("filemon/thumbs");
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    PathBuf::from(home).join(".cache/filemon/thumbs")
+}
+
+fn thumb_key(path: &Path, size: u64, mtime: u64) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    path.to_string_lossy().hash(&mut h);
+    size.hash(&mut h);
+    mtime.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+pub fn thumb(path: &Path) -> Result<String, String> {
+    let md = fs::metadata(path).map_err(|e| e.to_string())?;
+    let mtime = md
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let key = thumb_key(path, md.len(), mtime);
+    let cache = thumb_cache_dir().join(format!("{key}.png"));
+    if let Ok(cached) = fs::metadata(&cache) {
+        if let Ok(ctime) = cached.modified() {
+            if ctime >= md.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH) {
+                if let Ok(bytes) = fs::read(&cache) {
+                    if !bytes.is_empty() {
+                        return Ok(base64_encode(&bytes));
+                    }
+                }
+            }
+        }
+    }
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let png: Vec<u8> = if matches!(ext.as_str(), "mp4" | "mkv" | "webm" | "mov" | "avi") {
+        let out = std::process::Command::new("timeout")
+            .args(["10", "ffmpeg", "-v", "error", "-ss", "0.5", "-i"])
+            .arg(path)
+            .args(["-frames:v", "1", "-vf", "scale=320:-1", "-f", "image2pipe", "-vcodec", "png", "-"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() || out.stdout.is_empty() {
+            let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(if msg.is_empty() { "ffmpeg failed".to_string() } else { msg });
+        }
+        out.stdout
+    } else {
+        let img = image::open(path).map_err(|e| e.to_string())?;
+        let small = img.thumbnail(320, 320);
+        let mut bytes = Vec::new();
+        small
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .map_err(|e| e.to_string())?;
+        bytes
+    };
+    // Best effort: a failed cache write still returns the thumbnail.
+    let _ = fs::create_dir_all(thumb_cache_dir());
+    let _ = fs::write(&cache, &png);
+    Ok(base64_encode(&png))
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        s.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        s.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        s.push(if chunk.len() > 1 { ALPHABET[(n >> 6) as usize & 63] as char } else { '=' });
+        s.push(if chunk.len() > 2 { ALPHABET[n as usize & 63] as char } else { '=' });
+    }
+    s
 }
 
 pub fn open_path(path: &Path) -> Result<(), String> {
@@ -1097,6 +1539,272 @@ pub fn open_terminal(path: &Path) -> Result<(), String> {
     std::process::Command::new(&bin)
         .args(&args)
         .current_dir(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| format!("Could not launch {}: {}", bin, e))?;
+    Ok(())
+}
+
+// ---- Open With ----
+// GUI applications from the freedesktop .desktop files, matched to a file
+// by MIME type, launched with the file substituted into their Exec line.
+
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+pub struct AppInfo {
+    pub name: String,
+    pub exec: String,
+    pub mime_types: Vec<String>,
+    /// The .desktop file name, e.g. "org.gnome.TextEditor.desktop" —
+    /// what xdg-mime needs to set a default application.
+    pub desktop: String,
+}
+
+/// Parse one .desktop file's [Desktop Entry] section. None for hidden
+/// entries, entries without a usable Name/Exec, or terminal apps (those
+/// belong to Open in Terminal, not Open With).
+fn parse_desktop_file(path: &Path) -> Option<AppInfo> {
+    let text = fs::read_to_string(path).ok()?;
+    let mut name: Option<String> = None;
+    let mut exec: Option<String> = None;
+    let mut mime_types: Vec<String> = Vec::new();
+    let mut hidden = false;
+    let mut terminal = false;
+    let mut in_entry = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_entry = line == "[Desktop Entry]";
+            continue;
+        }
+        if !in_entry || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        match k {
+            "Name" => name = Some(v.trim().to_string()),
+            "Exec" => exec = Some(v.trim().to_string()),
+            "MimeType" => {
+                mime_types = v
+                    .split(';')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
+            }
+            "NoDisplay" => hidden = hidden || v.trim() == "true",
+            "Hidden" => hidden = hidden || v.trim() == "true",
+            "Terminal" => terminal = terminal || v.trim() == "true",
+            _ => {}
+        }
+    }
+    if hidden || terminal {
+        return None;
+    }
+    let (name, exec) = (name?, exec?);
+    if name.is_empty() || exec.is_empty() {
+        return None;
+    }
+    let desktop = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Some(AppInfo {
+        name,
+        exec,
+        mime_types,
+        desktop,
+    })
+}
+
+/// Set the default application for a file's type (xdg-mime). The desktop id
+/// must be a bare .desktop file name, never a path.
+pub fn set_default_app(path: &Path, desktop: &str) -> Result<(), String> {
+    if !desktop.ends_with(".desktop") || desktop.contains('/') || desktop.contains("..") {
+        return Err("not a .desktop file name".to_string());
+    }
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mime = mime_for_extension(&ext);
+    let out = std::process::Command::new("xdg-mime")
+        .args(["default", desktop, mime])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(())
+}
+
+fn parse_desktop_dir(dir: &Path) -> Vec<AppInfo> {
+    let mut out = Vec::new();
+    let Ok(rd) = fs::read_dir(dir) else {
+        return out;
+    };
+    for item in rd.flatten() {
+        let p = item.path();
+        if p.extension().is_some_and(|e| e == "desktop") {
+            if let Some(app) = parse_desktop_file(&p) {
+                out.push(app);
+            }
+        }
+    }
+    out
+}
+
+/// All GUI applications from the freedesktop application directories.
+/// Duplicates (same desktop file in two dirs) are kept once, first dir wins.
+pub fn list_applications() -> Vec<AppInfo> {
+    let mut dirs = vec![
+        PathBuf::from("/usr/share/applications"),
+        PathBuf::from("/usr/local/share/applications"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        dirs.push(PathBuf::from(home).join(".local/share/applications"));
+    }
+    let mut out: Vec<AppInfo> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for dir in dirs {
+        for app in parse_desktop_dir(&dir) {
+            if seen.insert(app.name.clone()) {
+                out.push(app);
+            }
+        }
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
+/// Best-effort MIME type for a file extension (used only to match apps).
+pub fn mime_for_extension(ext: &str) -> &'static str {
+    match ext.to_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "mp4" => "video/mp4",
+        "mkv" => "video/x-matroska",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "avi" => "video/x-msvideo",
+        "mp3" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "m4a" => "audio/mp4",
+        "pdf" => "application/pdf",
+        "txt" | "log" => "text/plain",
+        "md" => "text/markdown",
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "json" => "application/json",
+        "csv" => "text/csv",
+        "xml" => "application/xml",
+        "zip" => "application/zip",
+        "tar" => "application/x-tar",
+        "gz" => "application/gzip",
+        "7z" => "application/x-7z-compressed",
+        "deb" => "application/vnd.debian.binary-package",
+        "rpm" => "application/x-rpm",
+        _ => "application/octet-stream",
+    }
+}
+
+fn apps_for_mime(apps: Vec<AppInfo>, mime: &str) -> Vec<AppInfo> {
+    apps.into_iter()
+        .filter(|a| a.mime_types.iter().any(|m| m == mime))
+        .collect()
+}
+
+/// Applications that declare they handle this file's type, name-sorted.
+pub fn apps_for_path(path: &Path) -> Vec<AppInfo> {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    apps_for_mime(list_applications(), mime_for_extension(&ext))
+}
+
+/// Split an Exec line into argv, honouring single/double quotes. Field
+/// codes (%f, %F, %u, %U) are replaced with the file path; the rest
+/// (%i, %c, %k, …) are dropped, as the spec prescribes. With no field code
+/// at all the file is appended, so the app still gets it.
+fn exec_argv(exec: &str, path: &Path) -> Vec<String> {
+    let mut argv: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut in_token = false;
+    let mut quote: Option<char> = None;
+    let mut substituted = false;
+    let mut chars = exec.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else {
+                    cur.push(c);
+                }
+            }
+            None => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    in_token = true;
+                }
+                ' ' | '\t' => {
+                    if in_token {
+                        argv.push(std::mem::take(&mut cur));
+                        in_token = false;
+                    }
+                }
+                '%' => {
+                    if let Some(&code) = chars.peek() {
+                        chars.next();
+                        match code {
+                            'f' | 'F' | 'u' | 'U' => {
+                                cur.push_str(&path.to_string_lossy());
+                                in_token = true;
+                                substituted = true;
+                            }
+                            '%' => {
+                                cur.push('%');
+                                in_token = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {
+                    cur.push(c);
+                    in_token = true;
+                }
+            },
+        }
+    }
+    if in_token {
+        argv.push(cur);
+    }
+    if !substituted {
+        argv.push(path.to_string_lossy().into_owned());
+    }
+    argv
+}
+
+/// Launch `path` with the given Exec line. Detached, like open_terminal.
+pub fn open_with(path: &Path, exec: &str) -> Result<(), String> {
+    let argv = exec_argv(exec, path);
+    let Some((bin, args)) = argv.split_first() else {
+        return Err("Empty Exec line".to_string());
+    };
+    use std::os::unix::process::CommandExt;
+    std::process::Command::new(bin)
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -1594,6 +2302,237 @@ mod tests {
             .unwrap()
             .join("a.txt (copy).zip")
             .exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn desktop_parse_and_exec_substitution() {
+        let dir = std::env::temp_dir().join("filemon-test-apps");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("a.desktop"),
+            "[Desktop Entry]\nName=Alpha\nExec=alpha --opt %f\nMimeType=image/png;image/jpeg;\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("b.desktop"),
+            "[Desktop Entry]\nName=Hidden One\nExec=hidden\nNoDisplay=true\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("c.desktop"),
+            "[Desktop Entry]\nName=Term\nExec=term\nTerminal=true\n",
+        )
+        .unwrap();
+        fs::write(dir.join("d.txt"), "not a desktop file").unwrap();
+        let apps = parse_desktop_dir(&dir);
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].name, "Alpha");
+        assert_eq!(apps[0].mime_types, vec!["image/png", "image/jpeg"]);
+        assert_eq!(
+            apps_for_mime(apps.clone(), "image/png").len(),
+            1,
+            "png matches"
+        );
+        assert_eq!(
+            apps_for_mime(apps, "video/mp4").len(),
+            0,
+            "mp4 does not match"
+        );
+        let p = Path::new("/tmp/pic.png");
+        assert_eq!(
+            exec_argv("alpha --opt %f", p),
+            vec!["alpha", "--opt", "/tmp/pic.png"]
+        );
+        // Unknown field codes are dropped; a bare % is kept as %.
+        assert_eq!(
+            exec_argv("app %i %c %f %%", p),
+            vec!["app", "/tmp/pic.png", "%"]
+        );
+        // No field code: the file is appended.
+        assert_eq!(exec_argv("app --flag", p), vec!["app", "--flag", "/tmp/pic.png"]);
+        // Quoted args stay together.
+        assert_eq!(
+            exec_argv("app \"a b\" %f", p),
+            vec!["app", "a b", "/tmp/pic.png"]
+        );
+        assert_eq!(mime_for_extension("png"), "image/png");
+        assert_eq!(mime_for_extension("PNG"), "image/png");
+        assert_eq!(mime_for_extension("zzz"), "application/octet-stream");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn archive_listing_sha256_and_permissions() {
+        use std::io::Write as _;
+        let base = std::env::temp_dir().join("filemon-test-archive");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        // A zip with two files, built with the zip crate itself.
+        let zip_path = base.join("a.zip");
+        {
+            let file = fs::File::create(&zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("one.txt", opts).unwrap();
+            zip.write_all(b"one").unwrap();
+            zip.start_file("sub/two.txt", opts).unwrap();
+            zip.write_all(b"two!").unwrap();
+            zip.finish().unwrap();
+        }
+        let entries = list_archive(&zip_path).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "one.txt");
+        assert_eq!(entries[0].size, Some(3));
+        assert!(!entries[0].is_dir);
+        assert_eq!(entries[1].name, "sub/two.txt");
+        // A tar built by the system tar.
+        let tar_path = base.join("b.tar");
+        fs::write(base.join("t.txt"), "tar me\n").unwrap();
+        let status = std::process::Command::new("tar")
+            .args(["-cf"])
+            .arg(&tar_path)
+            .args(["-C"])
+            .arg(&base)
+            .arg("t.txt")
+            .status();
+        if let Ok(s) = status {
+            assert!(s.success());
+            let entries = list_archive(&tar_path).unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].name, "t.txt");
+            assert!(entries[0].size.is_none(), "tar listing has no sizes");
+        }
+        // Error paths: missing file, plain text, plain .gz.
+        assert!(list_archive(&base.join("nope.zip")).is_err());
+        fs::write(base.join("c.txt"), "not an archive\n").unwrap();
+        assert!(list_archive(&base.join("c.txt")).is_err());
+        // SHA-256: deterministic, content-sensitive, missing file errors.
+        let f = base.join("h.txt");
+        fs::write(&f, "hello\n").unwrap();
+        let h1 = file_sha256(&f).unwrap();
+        let h2 = file_sha256(&f).unwrap();
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 64);
+        assert!(h1.chars().all(|c| c.is_ascii_hexdigit()));
+        fs::write(&f, "hello?\n").unwrap();
+        assert_ne!(file_sha256(&f).unwrap(), h1);
+        assert!(file_sha256(&base.join("nope.txt")).is_err());
+        // Permissions: set 0o640 and read it back; out-of-range errors.
+        use std::os::unix::fs::PermissionsExt;
+        let mode = set_permissions(&f, 0o640).unwrap();
+        assert_eq!(mode, "640");
+        assert_eq!(fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o640);
+        assert!(set_permissions(&f, 0o10000).is_err());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn thumb_disk_cache() {
+        let cache = std::env::temp_dir().join("filemon-test-thumbcache");
+        let _ = fs::remove_dir_all(&cache);
+        std::env::set_var("FILEMON_THUMB_CACHE", &cache);
+        let base = std::env::temp_dir().join("filemon-test-thumb");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        // A real 8x4 PNG, built with the image crate.
+        let png_path = base.join("a.png");
+        let img = image::RgbImage::from_fn(8, 4, |x, _| image::Rgb([(x * 32) as u8, 0, 0]));
+        img.save(&png_path).unwrap();
+        // First call generates + writes the cache; second call hits it.
+        let first = thumb(&png_path).unwrap();
+        assert!(first.starts_with("iVBOR"), "PNG base64");
+        assert_eq!(thumb_cache_dir().read_dir().unwrap().count(), 1, "one cached file");
+        let second = thumb(&png_path).unwrap();
+        assert_eq!(first, second, "cache hit returns identical bytes");
+        // Editing the source invalidates the cache (mtime moves).
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let img2 = image::RgbImage::from_fn(8, 4, |_, _| image::Rgb([0, 200, 0]));
+        img2.save(&png_path).unwrap();
+        let third = thumb(&png_path).unwrap();
+        assert_ne!(first, third, "edited source re-renders");
+        // Error paths: missing file, text file, garbage video.
+        assert!(thumb(&base.join("nope.png")).is_err());
+        fs::write(base.join("t.txt"), "not an image\n").unwrap();
+        assert!(thumb(&base.join("t.txt")).is_err());
+        fs::write(base.join("v.mp4"), b"garbage, not a video").unwrap();
+        assert!(thumb(&base.join("v.mp4")).is_err());
+        std::env::remove_var("FILEMON_THUMB_CACHE");
+        let _ = fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn compare_dirs_matches_names() {
+        let base = std::env::temp_dir().join("filemon-test-compare");
+        let _ = fs::remove_dir_all(&base);
+        let a = base.join("a");
+        let b = base.join("b");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        // Same content, same name: same.
+        fs::write(a.join("same.txt"), "identical\n").unwrap();
+        fs::write(b.join("same.txt"), "identical\n").unwrap();
+        // Same name, different content: different.
+        fs::write(a.join("changed.txt"), "aaa\n").unwrap();
+        fs::write(b.join("changed.txt"), "bbb\n").unwrap();
+        // Same name, different size: different (no hash needed).
+        fs::write(a.join("bigger.txt"), "short\n").unwrap();
+        fs::write(b.join("bigger.txt"), "much longer content\n").unwrap();
+        // Only in a / only in b.
+        fs::write(a.join("only-a.txt"), "a\n").unwrap();
+        fs::write(b.join("only-b.txt"), "b\n").unwrap();
+        // Same-name folders count as same (no recursion).
+        fs::create_dir(a.join("sub")).unwrap();
+        fs::create_dir(b.join("sub")).unwrap();
+        // Hidden file: excluded unless include_hidden.
+        fs::write(a.join(".hidden"), "h\n").unwrap();
+        let res = compare_dirs(&a, &b, false).unwrap();
+        assert_eq!(res.only_a.len(), 1);
+        assert_eq!(res.only_a[0].name, "only-a.txt");
+        assert_eq!(res.only_b.len(), 1);
+        assert_eq!(res.only_b[0].name, "only-b.txt");
+        assert_eq!(res.different.len(), 2);
+        assert_eq!(res.same, 2, "same.txt + sub");
+        let res = compare_dirs(&a, &b, true).unwrap();
+        assert_eq!(res.only_a.len(), 2, "hidden file appears with include_hidden");
+        // Missing folder errors.
+        assert!(compare_dirs(&base.join("nope"), &b, false).is_err());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn content_search_and_duplicates() {
+        let base = std::env::temp_dir().join("filemon-test-content");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("sub")).unwrap();
+        fs::write(base.join("a.txt"), "hello world\nsecond line\n").unwrap();
+        fs::write(base.join("b.txt"), "nothing here\n").unwrap();
+        fs::write(base.join("sub/c.md"), "HELLO again\n").unwrap();
+        // Binary file containing the query must be skipped.
+        let mut bin = File::create(base.join("bin.dat")).unwrap();
+        bin.write_all(b"\x00\x01hello\x00\x02").unwrap();
+        // Duplicate pair + a same-size different file.
+        fs::write(base.join("dup1.txt"), "same content").unwrap();
+        fs::write(base.join("dup2.txt"), "same content").unwrap();
+        fs::write(base.join("diff.txt"), "same contenX").unwrap();
+        fs::write(base.join("empty.txt"), b"").unwrap();
+
+        let hits = search_content(&base, "hello", 10);
+        assert_eq!(hits.len(), 2, "a.txt + sub/c.md, binary skipped");
+        assert!(hits.iter().any(|h| h.entry.name == "a.txt" && h.line == 1));
+        assert!(hits.iter().any(|h| h.entry.name == "c.md" && h.line == 1));
+        assert!(hits.iter().all(|h| !h.snippet.contains('\u{0}')));
+        let hits_ci = search_content(&base, "HELLO", 10);
+        assert_eq!(hits_ci.len(), 2, "case-insensitive");
+
+        let groups = find_duplicates(&base);
+        assert_eq!(groups.len(), 1, "only the identical pair");
+        assert_eq!(groups[0].entries.len(), 2);
+        assert!(groups[0].entries.iter().any(|e| e.name == "dup1.txt"));
+        assert!(groups[0].entries.iter().any(|e| e.name == "dup2.txt"));
+        assert_eq!(groups[0].size, 12);
         let _ = fs::remove_dir_all(&base);
     }
 }

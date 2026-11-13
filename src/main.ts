@@ -44,12 +44,133 @@ type Tab = {
   sortKey: "name" | "size" | "modified" | "type";
   sortDir: number;
   isTrash: boolean;
+  zoom: 0 | 1 | 2;
+  groupBy: "none" | "type" | "date" | "size";
 };
 
+/* A pane is one independent browser: its own tabs, listing, selection and
+   search state. Single-pane mode is just panes[0]; dual pane adds panes[1].
+   The state proxies below delegate to the active pane, so the rest of the
+   code keeps using state.tabs / state.path / state.selection as before. */
+type ContentMatch = {
+  entry: Entry;
+  line: number;
+  snippet: string;
+};
+
+type DupeGroup = {
+  size: number;
+  entries: Entry[];
+};
+
+type AppInfo = {
+  name: string;
+  exec: string;
+  mime_types: string[];
+  desktop: string;
+};
+
+type ListFilter = {
+  kind: string;
+  ext: string;
+  minSize: number | null; // bytes
+  maxSize: number | null; // bytes
+  after: string | null; // yyyy-mm-dd
+  before: string | null; // yyyy-mm-dd
+};
+
+type ClosedTab = {
+  path: string;
+  view: Tab["view"];
+  sortKey: Tab["sortKey"];
+  sortDir: number;
+  isTrash: boolean;
+  zoom: Tab["zoom"];
+  groupBy: Tab["groupBy"];
+};
+
+type CompareRow = { entry: Entry; status: "only-here" | "only-there" | "different" };
+
+type CompareResult = {
+  only_a: Entry[];
+  only_b: Entry[];
+  different: Entry[];
+  same: number;
+};
+
+type Pane = {
+  tabs: Tab[];
+  activeTab: number;
+  nextTabId: number;
+  entries: Entry[];
+  filtered: Entry[];
+  selection: Set<string>;
+  searching: boolean;
+  searchQuery: string;
+  anchor: string | null;
+  contentMode: boolean;
+  contentMatches: Map<string, { line: number; snippet: string }> | null;
+  dupeGroups: DupeGroup[] | null;
+  // Group headers the user collapsed in this listing, by group key.
+  // Cleared on every loadDir so a new folder starts with all groups open.
+  collapsedGroups: Set<string>;
+  // Advanced filters (toolbar Filter button), session-only.
+  filter: ListFilter;
+  // Tabs closed with Ctrl+W / middle-click, newest last (cap 10);
+  // Ctrl+Shift+T restores the most recent one.
+  closedTabs: ClosedTab[];
+  // Folder comparison (dual pane): rows carry which side they belong to,
+  // relative to this pane. Null when not comparing.
+  compareRows: CompareRow[] | null;
+  compareSummary: string | null;
+};
+
+function makePane(): Pane {
+  return {
+    tabs: [],
+    activeTab: 0,
+    nextTabId: 1,
+    entries: [],
+    filtered: [],
+    selection: new Set<string>(),
+    searching: false,
+    searchQuery: "",
+    anchor: null,
+    contentMode: false,
+    contentMatches: null,
+    dupeGroups: null,
+    collapsedGroups: new Set<string>(),
+    filter: { kind: "all", ext: "", minSize: null, maxSize: null, after: null, before: null },
+    closedTabs: [],
+    compareRows: null,
+    compareSummary: null,
+  };
+}
+
 const state = {
-  tabs: [] as Tab[],
-  activeTab: 0,
-  nextTabId: 1,
+  panes: [makePane()],
+  activePane: 0,
+  get pane(): Pane {
+    return state.panes[state.activePane];
+  },
+  get tabs(): Tab[] {
+    return state.pane.tabs;
+  },
+  set tabs(v: Tab[]) {
+    state.pane.tabs = v;
+  },
+  get activeTab(): number {
+    return state.pane.activeTab;
+  },
+  set activeTab(v: number) {
+    state.pane.activeTab = v;
+  },
+  get nextTabId(): number {
+    return state.pane.nextTabId;
+  },
+  set nextTabId(v: number) {
+    state.pane.nextTabId = v;
+  },
   /* Path, history, view and sort live on the active tab. These accessors
      delegate to it, so the rest of the code keeps using state.path etc. */
   get path(): string {
@@ -88,19 +209,93 @@ const state = {
   set sortDir(v: number) {
     if (state.tabs[state.activeTab]) state.tabs[state.activeTab].sortDir = v;
   },
+  get zoom(): 0 | 1 | 2 {
+    return state.tabs[state.activeTab]?.zoom ?? 1;
+  },
+  set zoom(v: 0 | 1 | 2) {
+    if (state.tabs[state.activeTab]) state.tabs[state.activeTab].zoom = v;
+  },
+  get groupBy(): "none" | "type" | "date" | "size" {
+    return state.tabs[state.activeTab]?.groupBy ?? "none";
+  },
+  set groupBy(v: "none" | "type" | "date" | "size") {
+    if (state.tabs[state.activeTab]) state.tabs[state.activeTab].groupBy = v;
+  },
   get isTrash(): boolean {
     return state.tabs[state.activeTab]?.isTrash ?? false;
   },
   set isTrash(v: boolean) {
     if (state.tabs[state.activeTab]) state.tabs[state.activeTab].isTrash = v;
   },
-  entries: [] as Entry[],
-  filtered: [] as Entry[],
-  selection: new Set<string>(),
+  get entries(): Entry[] {
+    return state.pane.entries;
+  },
+  set entries(v: Entry[]) {
+    state.pane.entries = v;
+  },
+  get filtered(): Entry[] {
+    return state.pane.filtered;
+  },
+  set filtered(v: Entry[]) {
+    state.pane.filtered = v;
+  },
+  get selection(): Set<string> {
+    return state.pane.selection;
+  },
+  set selection(v: Set<string>) {
+    state.pane.selection = v;
+  },
+  get searching(): boolean {
+    return state.pane.searching;
+  },
+  set searching(v: boolean) {
+    state.pane.searching = v;
+  },
+  get searchQuery(): string {
+    return state.pane.searchQuery;
+  },
+  set searchQuery(v: string) {
+    state.pane.searchQuery = v;
+  },
+  get anchor(): string | null {
+    return state.pane.anchor;
+  },
+  set anchor(v: string | null) {
+    state.pane.anchor = v;
+  },
+  get contentMode(): boolean {
+    return state.pane.contentMode;
+  },
+  set contentMode(v: boolean) {
+    state.pane.contentMode = v;
+  },
+  get contentMatches(): Map<string, { line: number; snippet: string }> | null {
+    return state.pane.contentMatches;
+  },
+  set contentMatches(v: Map<string, { line: number; snippet: string }> | null) {
+    state.pane.contentMatches = v;
+  },
+  get dupeGroups(): DupeGroup[] | null {
+    return state.pane.dupeGroups;
+  },
+  set dupeGroups(v: DupeGroup[] | null) {
+    state.pane.dupeGroups = v;
+  },
+  get compareRows(): CompareRow[] | null {
+    return state.pane.compareRows;
+  },
+  set compareRows(v: CompareRow[] | null) {
+    state.pane.compareRows = v;
+  },
+  get compareSummary(): string | null {
+    return state.pane.compareSummary;
+  },
+  set compareSummary(v: string | null) {
+    state.pane.compareSummary = v;
+  },
   clipboard: null as { mode: "copy" | "cut"; paths: string[] } | null,
   showHidden: localStorage.getItem("filemon-hidden") === "1",
-  searching: false,
-  searchQuery: "",
+  dual: localStorage.getItem("filemon-dual") === "1",
   drives: [] as Drive[],
   previewOpen: false,
   homeDir: "",
@@ -118,8 +313,9 @@ function displaySize(e: Entry): string {
   return cached === undefined ? "—" : fmtSize(cached);
 }
 
-async function requestFolderSizes(): Promise<void> {
-  const missing = state.filtered
+async function requestFolderSizesFor(paneIdx: number): Promise<void> {
+  const p = state.panes[paneIdx];
+  const missing = p.filtered
     .filter((e) => e.is_dir && !folderSizeCache.has(e.path))
     .map((e) => e.path);
   if (missing.length === 0) return;
@@ -130,8 +326,12 @@ async function requestFolderSizes(): Promise<void> {
   }
 }
 
+async function requestFolderSizes(): Promise<void> {
+  return requestFolderSizesFor(state.activePane);
+}
+
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
-const TEXT_EXTS = new Set(["txt", "md", "rs", "py", "js", "ts", "json", "toml", "html", "css", "sh", "log", "csv"]);
+const TEXT_EXTS = new Set(["txt", "md", "rs", "py", "js", "ts", "jsx", "tsx", "json", "toml", "yaml", "yml", "xml", "html", "css", "scss", "sh", "log", "csv", "c", "h", "cpp", "hpp", "go", "java", "rb", "php", "swift", "kt"]);
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -163,8 +363,13 @@ function kindLabel(e: Entry): string {
     case "mp4": case "mkv": case "webm": case "mov": case "avi": return "Video";
     case "mp3": case "flac": case "wav": case "ogg": case "m4a": return "Audio";
     case "pdf": return "PDF document";
+    case "doc": case "docx": case "odt": case "rtf": return "Document";
+    case "xls": case "xlsx": case "ods": case "csv": return "Spreadsheet";
+    case "ppt": case "pptx": case "odp": return "Presentation";
     case "zip": case "tar": case "gz": case "xz": case "7z": case "rar": case "deb": case "rpm": return "Archive";
-    case "txt": case "md": case "rs": case "py": case "js": case "ts": case "json": case "toml": case "html": case "css": case "sh": return "Text file";
+    case "exe": case "AppImage": case "bin": case "run": case "msi": case "dmg": return "Application";
+    case "rs": case "py": case "js": case "ts": case "jsx": case "tsx": case "c": case "h": case "cpp": case "hpp": case "go": case "java": case "rb": case "php": case "swift": case "kt": case "html": case "css": case "scss": case "json": case "toml": case "yaml": case "yml": case "xml": case "sh": return "Code";
+    case "txt": case "md": case "log": return "Text file";
     case null: return "File";
     default: return `${(e.extension as string).toUpperCase()} file`;
   }
@@ -178,6 +383,14 @@ const ICONS: Record<string, string> = {
   audio: '<path d="M6 12V4.5l6-1.5V11"/><circle cx="4" cy="12" r="2"/><circle cx="10" cy="11" r="2"/>',
   archive: '<rect x="2.5" y="3" width="11" height="3" rx="0.5"/><path d="M3.5 6v6.5A1.5 1.5 0 0 0 5 14h6a1.5 1.5 0 0 0 1.5-1.5V6M8 8.5v3M6.5 10h3"/>',
   doc: '<path d="M4 1.5h5.5L13 5v9.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1z"/><path d="M5.5 8h5M5.5 10.5h5"/>',
+  text: '<path d="M4 1.5h5.5L13 5v9.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1z"/><path d="M9 1.5V5.5h4"/><path d="M5.5 8h5M5.5 10.5h5M5.5 12.5h3"/>',
+  pdf: '<path d="M4 1.5h5.5L13 5v9.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1z"/><path d="M9 1.5V5.5h4"/><path d="M6 13.5l1-2.5M10 13.5l-1-2.5M6.5 12h3"/>',
+  code: '<path d="M5.5 4.5L2.5 8l3 3.5M10.5 4.5L13.5 8l-3 3.5"/>',
+  sheet: '<rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11M2.5 9.5h11M6.5 2.5v11M10.5 2.5v11"/>',
+  slides: '<rect x="2" y="3" width="12" height="8" rx="1"/><path d="M6 13.5h4M8 11v2.5"/><circle cx="5" cy="7" r="1"/><path d="M8.5 5.5L11 8.5H8.5"/>',
+  exec: '<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M4.5 6l2.5 2-2.5 2M8.5 10H12"/>',
+  link: '<path d="M6.5 9.5a3 3 0 0 0 4.2 0l1.8-1.8a3 3 0 0 0-4.2-4.2l-1 1"/><path d="M9.5 6.5a3 3 0 0 0-4.2 0L3.5 8.3a3 3 0 0 0 4.2 4.2l1-1"/>',
+  drive: '<rect x="2" y="4.5" width="12" height="7" rx="1"/><path d="M4.5 8h.01M7 8h.01M12 8h.01"/>',
   panel: '<rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M10.5 2.5v11"/>',
   sun: '<circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/>',
   moon: '<path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/>',
@@ -204,17 +417,48 @@ function isImageEntry(e: Entry): boolean {
   }
 }
 
+/** Coarse group for the advanced Type filter (mirrors kindLabel's families). */
+function filterKindGroup(e: Entry): string {
+  if (e.is_dir) return "folders";
+  switch (e.extension) {
+    case "png": case "jpg": case "jpeg": case "gif": case "webp": case "svg": case "bmp": return "images";
+    case "mp4": case "mkv": case "webm": case "mov": case "avi": return "videos";
+    case "mp3": case "flac": case "wav": case "ogg": case "m4a": return "audio";
+    case "pdf": case "doc": case "docx": case "odt": case "rtf": case "xls": case "xlsx": case "ods": case "csv": case "ppt": case "pptx": case "odp": return "documents";
+    case "zip": case "tar": case "gz": case "xz": case "7z": case "rar": case "deb": case "rpm": return "archives";
+    case "rs": case "py": case "js": case "ts": case "jsx": case "tsx": case "c": case "h": case "cpp": case "hpp": case "go": case "java": case "rb": case "php": case "swift": case "kt": case "html": case "css": case "scss": case "json": case "toml": case "yaml": case "yml": case "xml": case "sh": return "code";
+    default: return "other";
+  }
+}
+
+function filterActive(p: Pane = state.pane): boolean {
+  const f = p.filter;
+  return f.kind !== "all" || !!f.ext || f.minSize !== null || f.maxSize !== null || !!f.after || !!f.before;
+}
+
 function iconFor(e: Entry): string {
-  if (e.is_dir) return ICONS.folder;
+  if (e.is_dir) return e.is_symlink ? ICONS.link : ICONS.folder;
+  if (e.is_symlink) return ICONS.link;
   if (isImageEntry(e)) return ICONS.image;
   switch (e.extension) {
     case "mp4": case "mkv": case "webm": case "mov": case "avi": return ICONS.video;
     case "mp3": case "flac": case "wav": case "ogg": case "m4a": return ICONS.audio;
     case "zip": case "tar": case "gz": case "xz": case "7z": case "rar": case "deb": case "rpm": return ICONS.archive;
-    case "pdf": case "txt": case "md": case "rs": case "py": case "js": case "ts": case "json": return ICONS.doc;
+    case "pdf": return ICONS.pdf;
+    case "doc": case "docx": case "odt": case "rtf": return ICONS.doc;
+    case "xls": case "xlsx": case "ods": case "csv": return ICONS.sheet;
+    case "ppt": case "pptx": case "odp": return ICONS.slides;
+    case "exe": case "AppImage": case "bin": case "run": case "msi": case "dmg": return ICONS.exec;
+    case "rs": case "py": case "js": case "ts": case "jsx": case "tsx": case "c": case "h": case "cpp": case "hpp": case "go": case "java": case "rb": case "php": case "swift": case "kt": case "html": case "css": case "scss": case "json": case "toml": case "yaml": case "yml": case "xml": case "sh": return ICONS.code;
+    case "txt": case "md": case "log": return ICONS.text;
     default: return ICONS.file;
   }
 }
+
+// Video extensions, for first-frame thumbnails in the icon grid.
+const VIDEO_EXTS = new Set(["mp4", "mkv", "webm", "mov", "avi"]);
+// Extensions whose preview pane gets syntax highlighting instead of plain text.
+const CODE_EXTS = new Set(["rs", "py", "js", "ts", "jsx", "tsx", "c", "h", "cpp", "hpp", "go", "java", "rb", "php", "swift", "kt", "html", "css", "scss", "json", "toml", "yaml", "yml", "xml", "sh"]);
 
 function iconSvg(inner: string, cls = "icon"): string {
   return `<svg class="${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -251,8 +495,7 @@ function driveFor(path: string): Drive | null {
 }
 
 async function navigate(path: string, push = true): Promise<void> {
-  state.isTrash = false;
-  if (push) {
+  state.isTrash = false;  if (push) {
     state.history = state.history.slice(0, state.histIndex + 1);
     state.history.push(path);
     state.histIndex = state.history.length - 1;
@@ -262,8 +505,47 @@ async function navigate(path: string, push = true): Promise<void> {
   state.searchQuery = "";
   ($("search") as HTMLInputElement).value = "";
   state.selection.clear();
+  state.anchor = null;
   await loadDir();
   updateNavButtons();
+}
+
+/* ---- Address bar (Ctrl+L) ---- */
+// The breadcrumbs swap for an editable path. Enter navigates (a leading ~
+// expands to Home, a relative path resolves against the current folder);
+// Esc or blur puts the breadcrumbs back.
+
+function showAddressBar(): void {
+  const input = $("address-bar") as HTMLInputElement;
+  input.value = state.path;
+  ($("crumbs") as HTMLElement).hidden = true;
+  input.hidden = false;
+  input.focus();
+  input.select();
+}
+
+function hideAddressBar(): void {
+  ($("address-bar") as HTMLInputElement).hidden = true;
+  ($("crumbs") as HTMLElement).hidden = false;
+}
+
+async function goToAddress(): Promise<void> {
+  const input = $("address-bar") as HTMLInputElement;
+  const raw = input.value.trim();
+  hideAddressBar();
+  if (!raw || raw === state.path) return;
+  let path = raw.replace(/^~/, state.homeDir);
+  if (!path.startsWith("/")) path = `${state.path.replace(/\/$/, "")}/${path}`;
+  try {
+    const p = await invoke<Properties>("get_properties", { path });
+    if (!p.is_dir) {
+      toast("That path is a file, not a folder", true);
+      return;
+    }
+    await navigate(path);
+  } catch {
+    toast(`No such folder: ${raw}`, true);
+  }
 }
 
 function updateNavButtons(): void {
@@ -291,30 +573,37 @@ function tabTitle(t: Tab): string {
   return name || "This PC";
 }
 
-function saveTabs(): void {
+function saveTabs(paneIdx = state.activePane): void {
+  // Per-pane persistence: pane 0 keeps the legacy keys, pane 1 gets -1 keys.
+  const p = state.panes[paneIdx];
+  const suffix = paneIdx === 0 ? "" : "-1";
   try {
     localStorage.setItem(
-      "filemon-tabs",
+      "filemon-tabs" + suffix,
       JSON.stringify(
-        state.tabs.map((t) => ({
+        p.tabs.map((t) => ({
           path: t.path,
           view: t.view,
           sortKey: t.sortKey,
           sortDir: t.sortDir,
           isTrash: t.isTrash,
+          zoom: t.zoom,
+          groupBy: t.groupBy,
         })),
       ),
     );
-    localStorage.setItem("filemon-active-tab", String(state.activeTab));
+    localStorage.setItem("filemon-active-tab" + suffix, String(p.activeTab));
   } catch {
     /* storage unavailable — tabs still work for this session */
   }
 }
 
-function restoreTabs(home: string): void {
-  let saved: { path: string; view: Tab["view"]; sortKey: Tab["sortKey"]; sortDir: number; isTrash?: boolean }[] = [];
+function restoreTabs(home: string, paneIdx = state.activePane): void {
+  const p = state.panes[paneIdx];
+  let saved: { path: string; view: Tab["view"]; sortKey: Tab["sortKey"]; sortDir: number; isTrash?: boolean; zoom?: number; groupBy?: string }[] = [];
+  const suffix = paneIdx === 0 ? "" : "-1";
   try {
-    const raw = JSON.parse(localStorage.getItem("filemon-tabs") ?? "[]");
+    const raw = JSON.parse(localStorage.getItem("filemon-tabs" + suffix) ?? "[]");
     if (Array.isArray(raw)) saved = raw;
   } catch {
     saved = [];
@@ -325,8 +614,8 @@ function restoreTabs(home: string): void {
   const sortKey = (localStorage.getItem("filemon-sort") as Tab["sortKey"]) || "name";
   const list = saved.filter((t) => typeof t?.path === "string" && t.path.startsWith("/"));
   const seeds = list.length > 0 ? list : [{ path: home, view, sortKey, sortDir: 1, isTrash: false }];
-  state.tabs = seeds.map((t) => ({
-    id: state.nextTabId++,
+  p.tabs = seeds.map((t) => ({
+    id: p.nextTabId++,
     path: t.path,
     history: [t.path],
     histIndex: 0,
@@ -334,9 +623,11 @@ function restoreTabs(home: string): void {
     sortKey: (["name", "size", "modified", "type"].includes(t.sortKey) ? t.sortKey : "name") as Tab["sortKey"],
     sortDir: t.sortDir === -1 ? -1 : 1,
     isTrash: t.isTrash === true,
+    zoom: (t.zoom === 0 || t.zoom === 2 ? t.zoom : 1) as Tab["zoom"],
+    groupBy: (["type", "date", "size"].includes(t.groupBy ?? "") ? t.groupBy : "none") as Tab["groupBy"],
   }));
-  const active = Number(localStorage.getItem("filemon-active-tab") ?? "0");
-  state.activeTab = active >= 0 && active < state.tabs.length ? active : 0;
+  const active = Number(localStorage.getItem("filemon-active-tab" + suffix) ?? "0");
+  p.activeTab = active >= 0 && active < p.tabs.length ? active : 0;
 }
 
 // ---- Pin folders to Quick access ----
@@ -458,6 +749,7 @@ async function switchTab(i: number): Promise<void> {
   if (i === state.activeTab || i < 0 || i >= state.tabs.length) return;
   state.activeTab = i;
   state.selection.clear();
+  state.anchor = null;
   state.searching = false;
   state.searchQuery = "";
   ($("search") as HTMLInputElement).value = "";
@@ -479,6 +771,8 @@ function newTab(path = state.path): void {
     sortKey: src.sortKey,
     sortDir: src.sortDir,
     isTrash: false,
+    zoom: src.zoom,
+    groupBy: src.groupBy,
   });
   void switchTab(state.tabs.length - 1);
 }
@@ -496,6 +790,18 @@ async function closeTab(i: number): Promise<void> {
     updateNavButtons();
     return;
   }
+  // Remember the closed tab so Ctrl+Shift+T can bring it back.
+  const gone = state.tabs[i];
+  state.pane.closedTabs.push({
+    path: gone.path,
+    view: gone.view,
+    sortKey: gone.sortKey,
+    sortDir: gone.sortDir,
+    isTrash: gone.isTrash,
+    zoom: gone.zoom,
+    groupBy: gone.groupBy,
+  });
+  if (state.pane.closedTabs.length > 10) state.pane.closedTabs.shift();
   state.tabs.splice(i, 1);
   if (i < state.activeTab) {
     state.activeTab--;
@@ -515,10 +821,191 @@ function openInNewTab(path: string): void {
   newTab(path);
 }
 
+/** Ctrl+Shift+T: reopen the most recently closed tab, with its old view/sort. */
+async function reopenClosedTab(): Promise<void> {
+  const t = state.pane.closedTabs.pop();
+  if (!t) {
+    toast("No recently closed tab");
+    return;
+  }
+  state.tabs.push({
+    id: state.nextTabId++,
+    path: t.path,
+    history: [t.path],
+    histIndex: 0,
+    view: t.view,
+    sortKey: t.sortKey,
+    sortDir: t.sortDir,
+    isTrash: t.isTrash,
+    zoom: t.zoom,
+    groupBy: t.groupBy,
+  });
+  await switchTab(state.tabs.length - 1);
+}
+
+/* ---- Dual pane ---- */
+// The toolbar, crumbs, tab bar and status bar always describe the ACTIVE
+// pane. Clicking (mousedown) inside a pane activates it first, so every
+// existing handler — clicks, drags, keyboard, context menu — keeps working
+// on the pane the user is looking at, with no per-handler pane plumbing.
+
+function setActivePane(i: number): void {
+  if (i === state.activePane || i < 0 || i > 1 || (i === 1 && !state.dual)) return;
+  state.activePane = i;
+  localStorage.setItem("filemon-active-pane", String(i));
+  document.querySelectorAll(".pane").forEach((el, idx) => el.classList.toggle("is-active", idx === i));
+  ($("search") as HTMLInputElement).value = state.searchQuery;
+  ($("sort-key") as HTMLSelectElement).value = state.sortKey;
+  const contentBtn = $("search-content");
+  contentBtn.setAttribute("aria-pressed", String(state.contentMode));
+  contentBtn.classList.toggle("is-active", state.contentMode);
+  render();
+  updateNavButtons();
+}
+
+let secondPaneBuilt = false;
+
+function buildSecondPane(): void {
+  if (secondPaneBuilt) return;
+  secondPaneBuilt = true;
+  const src = $("file-area");
+  const clone = src.cloneNode(true) as HTMLElement;
+  clone.id = "file-area-1";
+  clone.querySelectorAll("[id]").forEach((el) => {
+    el.id = el.id + "-1";
+  });
+  const pane = document.createElement("div");
+  pane.className = "pane";
+  pane.id = "pane-1";
+  pane.appendChild(clone);
+  $("panes").appendChild(pane);
+  pane.addEventListener("mousedown", () => setActivePane(1));
+  // The clone's own controls (ids now end in -1).
+  ($("empty-new-folder-1") as HTMLButtonElement).addEventListener("click", () => {
+    setActivePane(1);
+    askNew("folder");
+  });
+  ($("empty-clear-search-1") as HTMLButtonElement).addEventListener("click", () => {
+    setActivePane(1);
+    clearSearch();
+  });
+  ($("error-retry-1") as HTMLButtonElement).addEventListener("click", () => {
+    setActivePane(1);
+    void loadDirFor(1);
+  });
+  ($("dupe-delete-1") as HTMLButtonElement).addEventListener("click", () => {
+    setActivePane(1);
+    void deleteSelectedDupes();
+  });
+  ($("dupe-done-1") as HTMLButtonElement).addEventListener("click", () => {
+    setActivePane(1);
+    void exitDupes();
+  });
+  ($("compare-copy-out-1") as HTMLButtonElement).addEventListener("click", () => {
+    setActivePane(1);
+    void copyMissing(true);
+  });
+  ($("compare-copy-in-1") as HTMLButtonElement).addEventListener("click", () => {
+    setActivePane(1);
+    void copyMissing(false);
+  });
+  ($("compare-done-1") as HTMLButtonElement).addEventListener("click", () => {
+    setActivePane(1);
+    void exitCompare();
+  });
+  clone.querySelectorAll("#file-table-1 th[data-sort]").forEach((th) => {
+    th.addEventListener("click", () => {
+      setActivePane(1);
+      const key = (th as HTMLElement).dataset.sort as typeof state.sortKey;
+      if (state.sortKey === key) state.sortDir *= -1;
+      else {
+        state.sortKey = key;
+        state.sortDir = 1;
+      }
+      ($("sort-key") as HTMLSelectElement).value = key;
+      saveTabs();
+      render();
+    });
+  });
+  // Background context menu + drop target for pane 1 (rows/tiles stop
+  // propagation, so this only fires for empty space, like pane 0).
+  clone.addEventListener("contextmenu", (ev) => {
+    if ((ev.target as HTMLElement).closest("tr, .tile")) return;
+    ev.preventDefault();
+    setActivePane(1);
+    showContextMenu(ev.clientX, ev.clientY, null);
+  });
+  clone.addEventListener("dragover", (ev) => {
+    if (!isInternalDrag(ev)) return;
+    if ((ev.target as HTMLElement).closest("tbody tr, .tile")) return;
+    ev.preventDefault();
+    ev.dataTransfer!.dropEffect = ev.ctrlKey ? "copy" : "move";
+    markDropTarget(clone);
+  });
+  clone.addEventListener("drop", (ev) => {
+    ev.preventDefault();
+    markDropTarget(null);
+    const p = state.panes[1];
+    const tab = p.tabs[p.activeTab];
+    if (!tab || tab.isTrash) return;
+    const paths = dropPaths(ev);
+    if (!paths) return;
+    void performDrop(paths, tab.path, ev.ctrlKey);
+  });
+}
+
+async function setDual(on: boolean): Promise<void> {
+  if (on === state.dual) return;
+  state.dual = on;
+  localStorage.setItem("filemon-dual", on ? "1" : "0");
+  const btn = $("act-dual") as HTMLButtonElement;
+  btn.classList.toggle("is-active", on);
+  btn.setAttribute("aria-pressed", String(on));
+  if (on) {
+    if (state.panes.length === 1) {
+      state.panes.push(makePane());
+      restoreTabs(state.homeDir, 1);
+    }
+    buildSecondPane();
+    ($("pane-1") as HTMLElement).hidden = false;
+    document.querySelectorAll(".pane-head").forEach((el) => ((el as HTMLElement).hidden = false));
+    await loadDirFor(1);
+    render();
+  } else {
+    saveTabs(1);
+    state.activePane = 0;
+    localStorage.setItem("filemon-active-pane", "0");
+    ($("pane-1") as HTMLElement).hidden = true;
+    document.querySelectorAll(".pane-head").forEach((el) => ((el as HTMLElement).hidden = true));
+    document.querySelectorAll(".pane").forEach((el, idx) => el.classList.toggle("is-active", idx === 0));
+    render();
+    updateNavButtons();
+  }
+}
+
+/** F5 = copy, F6 = move the active pane's selection into the other pane. */
+async function transferToOtherPane(copy: boolean): Promise<void> {
+  if (!state.dual) return;
+  const other = 1 - state.activePane;
+  const tab = state.panes[other].tabs[state.panes[other].activeTab];
+  if (!tab || tab.isTrash) {
+    toast("The other pane is showing the Trash", true);
+    return;
+  }
+  const paths = [...state.selection];
+  if (paths.length === 0) {
+    toast("Nothing selected");
+    return;
+  }
+  const outcome = await runTransfer(paths, tab.path, copy);
+  if (outcome) await loadDirFor(other);
+}
+
 /** Switch the active tab to the Trash (the freedesktop Trash, not a folder). */
 async function openTrash(): Promise<void> {
   state.isTrash = true;
   state.selection.clear();
+  state.anchor = null;
   state.searching = false;
   state.searchQuery = "";
   ($("search") as HTMLInputElement).value = "";
@@ -582,23 +1069,173 @@ async function trashPaths(paths: string[]): Promise<void> {
   }
 }
 
-function applyFilterSort(): void {
-  let list = state.entries;
+/** Size used for ordering: a folder's computed size (or -1 while unknown). */
+function effectiveSize(e: Entry): number {
+  if (!e.is_dir) return e.size ?? -1;
+  return folderSizeCache.get(e.path) ?? -1;
+}
+
+function applyFilterSortFor(p: Pane): void {
+  // Result modes keep their own order: content matches are relevance order,
+  // duplicate groups are size order, compare rows are grouped by side.
+  // No name filter, no re-sort.
+  if (p.contentMatches || p.dupeGroups || p.compareRows) {
+    p.filtered = [...p.entries];
+    return;
+  }
+  let list = p.entries;
   if (!state.showHidden) list = list.filter((e) => !e.hidden);
-  const q = state.searchQuery.trim().toLowerCase();
-  if (q && !state.searching) list = list.filter((e) => e.name.toLowerCase().includes(q));
-  const dir = state.sortDir;
-  const key = state.sortKey;
+  const q = p.searchQuery.trim().toLowerCase();
+  if (q && !p.searching) list = list.filter((e) => e.name.toLowerCase().includes(q));
+  // Advanced filters (toolbar Filter button): type group, extension,
+  // size range, modified-date range. A size bound excludes entries whose
+  // size is unknown (folders still being measured sort as -1).
+  const f = p.filter;
+  if (f.kind !== "all" || f.ext || f.minSize !== null || f.maxSize !== null || f.after || f.before) {
+    list = list.filter((e) => {
+      if (f.kind !== "all" && filterKindGroup(e) !== f.kind) return false;
+      if (f.ext && (e.extension ?? "").toLowerCase() !== f.ext.toLowerCase()) return false;
+      if (f.minSize !== null || f.maxSize !== null) {
+        const sz = e.is_dir ? effectiveSize(e) : (e.size ?? -1);
+        if (sz < 0) return false;
+        if (f.minSize !== null && sz < f.minSize) return false;
+        if (f.maxSize !== null && sz > f.maxSize) return false;
+      }
+      if (f.after && (e.modified ?? 0) * 1000 < new Date(`${f.after}T00:00:00`).getTime()) return false;
+      if (f.before && (e.modified ?? 0) * 1000 > new Date(`${f.before}T23:59:59`).getTime()) return false;
+      return true;
+    });
+  }
+  const tab = p.tabs[p.activeTab];
+  const dir = tab?.sortDir ?? 1;
+  const key = tab?.sortKey ?? "name";
   list = [...list].sort((a, b) => {
+    if (key === "size") {
+      // True size order: a folder sorts among files by its computed size
+      // instead of always grouping first (folders with unknown size sort last).
+      return (effectiveSize(a) - effectiveSize(b)) * dir;
+    }
     if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
     let cmp = 0;
     if (key === "name") cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-    else if (key === "size") cmp = (a.size ?? -1) - (b.size ?? -1);
     else if (key === "modified") cmp = (a.modified ?? 0) - (b.modified ?? 0);
     else cmp = kindLabel(a).localeCompare(kindLabel(b));
     return cmp * dir;
   });
-  state.filtered = list;
+  p.filtered = list;
+}
+
+function applyFilterSort(): void {
+  applyFilterSortFor(state.pane);
+}
+
+/* ---- Grouping (Appearance: Group by) ---- */
+
+type GroupMode = "none" | "type" | "date" | "size";
+
+type Group = { key: string; label: string; entries: Entry[] };
+
+const GROUP_ORDER: Record<Exclude<GroupMode, "none">, string[]> = {
+  type: ["folders", "images", "videos", "audio", "documents", "sheets", "slides", "archives", "apps", "code", "text", "other"],
+  date: ["today", "yesterday", "week", "month", "earlier", "unknown"],
+  size: ["large", "medium", "small", "tiny", "unknown"],
+};
+
+function groupLabelFor(e: Entry, mode: Exclude<GroupMode, "none">): { key: string; label: string } {
+  if (mode === "type") {
+    if (e.is_dir) return { key: "folders", label: "Folders" };
+    switch (kindLabel(e)) {
+      case "Image": return { key: "images", label: "Images" };
+      case "Video": return { key: "videos", label: "Videos" };
+      case "Audio": return { key: "audio", label: "Audio" };
+      case "PDF document": case "Document": return { key: "documents", label: "Documents" };
+      case "Spreadsheet": return { key: "sheets", label: "Spreadsheets" };
+      case "Presentation": return { key: "slides", label: "Presentations" };
+      case "Archive": return { key: "archives", label: "Archives" };
+      case "Application": return { key: "apps", label: "Applications" };
+      case "Code": return { key: "code", label: "Code" };
+      case "Text file": return { key: "text", label: "Text files" };
+      default: return { key: "other", label: "Other files" };
+    }
+  }
+  if (mode === "date") {
+    if (e.modified === null || e.modified === undefined) return { key: "unknown", label: "Unknown date" };
+    const day = 86_400_000;
+    const now = new Date();
+    const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const m = e.modified * 1000;
+    if (m >= startToday) return { key: "today", label: "Today" };
+    if (m >= startToday - day) return { key: "yesterday", label: "Yesterday" };
+    if (m >= startToday - 7 * day) return { key: "week", label: "This week" };
+    if (m >= startToday - 30 * day) return { key: "month", label: "This month" };
+    return { key: "earlier", label: "Earlier" };
+  }
+  const s = effectiveSize(e);
+  if (s < 0) return { key: "unknown", label: "Unknown size" };
+  if (s < 100 * 1024) return { key: "tiny", label: "Tiny (under 100 KB)" };
+  if (s < 1024 * 1024) return { key: "small", label: "Small (100 KB – 1 MB)" };
+  if (s < 100 * 1024 * 1024) return { key: "medium", label: "Medium (1 – 100 MB)" };
+  return { key: "large", label: "Large (over 100 MB)" };
+}
+
+// Groups the pane's filtered listing by the active tab's group mode.
+// Null when grouping is off or a result mode (content/duplicates/compare)
+// owns the order. Within a group the entries keep the current sort order.
+function groupedEntries(p: Pane): Group[] | null {
+  const mode = p.tabs[p.activeTab]?.groupBy ?? "none";
+  if (mode === "none" || p.contentMatches || p.dupeGroups || p.compareRows) return null;
+  const byKey = new Map<string, Group>();
+  for (const e of p.filtered) {
+    const { key, label } = groupLabelFor(e, mode);
+    let g = byKey.get(key);
+    if (!g) {
+      g = { key, label, entries: [] };
+      byKey.set(key, g);
+    }
+    g.entries.push(e);
+  }
+  return GROUP_ORDER[mode].map((k) => byKey.get(k)!).filter(Boolean);
+}
+
+function makeGroupHeadRow(p: Pane, g: Group): HTMLTableRowElement {
+  const head = document.createElement("tr");
+  head.className = "group-head";
+  const td = document.createElement("td");
+  td.colSpan = 4;
+  const collapsed = p.collapsedGroups.has(g.key);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "group-toggle";
+  btn.dataset.group = g.key;
+  btn.setAttribute("aria-expanded", String(!collapsed));
+  btn.textContent = `${collapsed ? "▸" : "▾"} ${g.label} · ${g.entries.length} item${g.entries.length === 1 ? "" : "s"}`;
+  btn.addEventListener("click", () => {
+    if (p.collapsedGroups.has(g.key)) p.collapsedGroups.delete(g.key);
+    else p.collapsedGroups.add(g.key);
+    render();
+  });
+  td.appendChild(btn);
+  head.appendChild(td);
+  return head;
+}
+
+function makeGroupHeadDiv(p: Pane, g: Group): HTMLDivElement {
+  const collapsed = p.collapsedGroups.has(g.key);
+  const head = document.createElement("div");
+  head.className = "group-head";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "group-toggle";
+  btn.dataset.group = g.key;
+  btn.setAttribute("aria-expanded", String(!collapsed));
+  btn.textContent = `${collapsed ? "▸" : "▾"} ${g.label} · ${g.entries.length} item${g.entries.length === 1 ? "" : "s"}`;
+  btn.addEventListener("click", () => {
+    if (p.collapsedGroups.has(g.key)) p.collapsedGroups.delete(g.key);
+    else p.collapsedGroups.add(g.key);
+    render();
+  });
+  head.appendChild(btn);
+  return head;
 }
 
 function renderCrumbs(): void {
@@ -636,111 +1273,294 @@ function renderCrumbs(): void {
   $("side-path").textContent = state.path;
 }
 
-function renderTable(): void {
-  const body = $("file-body");
-  body.innerHTML = "";
-  for (const e of state.filtered) {
-    const tr = document.createElement("tr");
-    tr.dataset.path = e.path;
-    if (state.selection.has(e.path)) tr.classList.add("is-selected");
-    // Trashed items cannot be dragged out (Restore is the way back); that
-    // also keeps the .trashinfo from being orphaned by a move.
-    tr.draggable = !state.isTrash;
-    tr.addEventListener("dragstart", (ev) => onDragStart(ev, e, tr));
-    tr.addEventListener("dragend", () => onDragEnd(tr));
-    if (e.is_dir) attachDropTarget(tr, () => e.path);
-    const nameTd = document.createElement("td");
-    // NB: .cell-name is display:flex — it must wrap the content in a div.
-    // Putting it on the td itself turns the cell into a flex box, and
-    // WebKitGTK then drops that cell's collapsed bottom border, so the row
-    // dividers looked cut under the Name column.
-    nameTd.innerHTML = `<div class="cell-name">${iconSvg(iconFor(e), "icon file-icon" + (e.is_dir ? " is-dir" : ""))}<div class="cell-name-text"><span class="file-name">${escapeHtml(e.name)}</span>${state.isTrash && e.original_path ? `<span class="file-sub" title="${escapeHtml(e.original_path)}">${escapeHtml(e.original_path)}</span>` : ""}</div></div>`;
-    const modTd = document.createElement("td");
-    modTd.textContent = fmtDate(e.modified);
-    const typeTd = document.createElement("td");
-    typeTd.textContent = kindLabel(e);
-    const sizeTd = document.createElement("td");
-    sizeTd.className = "num";
-    sizeTd.textContent = displaySize(e);
-    tr.append(nameTd, modTd, typeTd, sizeTd);
-    tr.addEventListener("click", (ev) => onRowClick(ev, e));
-    tr.addEventListener("dblclick", (ev) => {
-      if (ev.ctrlKey || ev.metaKey) void openEntry(e, true);
-      else void openEntry(e);
-    });
-    tr.addEventListener("auxclick", (ev) => {
-      if (ev.button === 1 && e.is_dir) {
-        ev.preventDefault();
-        void openEntry(e, true);
-      }
-    });
-    tr.addEventListener("contextmenu", (ev) => {
+function makeEntryRow(p: Pane, e: Entry): HTMLTableRowElement {
+  const tr = document.createElement("tr");
+  tr.dataset.path = e.path;
+  if (p.selection.has(e.path)) tr.classList.add("is-selected");
+  // Trashed items cannot be dragged out (Restore is the way back); that
+  // also keeps the .trashinfo from being orphaned by a move.
+  const pIsTrash = p.tabs[p.activeTab]?.isTrash ?? false;
+  tr.draggable = !pIsTrash;
+  tr.addEventListener("dragstart", (ev) => onDragStart(ev, e, tr));
+  tr.addEventListener("dragend", () => onDragEnd(tr));
+  if (e.is_dir) attachDropTarget(tr, () => e.path);
+  let sub = "";
+  if (pIsTrash && e.original_path) {
+    sub = `<span class="file-sub" title="${escapeHtml(e.original_path)}">${escapeHtml(e.original_path)}</span>`;
+  } else if (p.contentMatches?.has(e.path)) {
+    const m = p.contentMatches.get(e.path)!;
+    const label = `line ${m.line}: ${m.snippet}`;
+    sub = `<span class="file-sub" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`;
+  } else if (p.dupeGroups) {
+    // Identical names in different folders need their parent shown.
+    const parent = parentOf(e.path) ?? "/";
+    sub = `<span class="file-sub" title="${escapeHtml(parent)}">${escapeHtml(parent)}</span>`;
+  } else if (p.compareRows) {
+    const row = p.compareRows.find((r) => r.entry.path === e.path);
+    const label =
+      row?.status === "only-here"
+        ? "Only in this pane"
+        : row?.status === "only-there"
+          ? "Only in the other pane"
+          : "Different — size or content differs";
+    sub = `<span class="file-sub" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`;
+  }
+  const nameTd = document.createElement("td");
+  // NB: .cell-name is display:flex — it must wrap the content in a div.
+  // Putting it on the td itself turns the cell into a flex box, and
+  // WebKitGTK then drops that cell's collapsed bottom border, so the row
+  // dividers looked cut under the Name column.
+  nameTd.innerHTML = `<div class="cell-name">${iconSvg(iconFor(e), "icon file-icon" + (e.is_dir ? " is-dir" : ""))}<div class="cell-name-text"><span class="file-name">${escapeHtml(e.name)}</span>${sub}</div></div>`;
+  const modTd = document.createElement("td");
+  modTd.textContent = fmtDate(e.modified);
+  const typeTd = document.createElement("td");
+  typeTd.textContent = kindLabel(e);
+  const sizeTd = document.createElement("td");
+  sizeTd.className = "num";
+  sizeTd.textContent = displaySize(e);
+  tr.append(nameTd, modTd, typeTd, sizeTd);
+  tr.addEventListener("click", (ev) => onRowClick(ev, e));
+  tr.addEventListener("dblclick", (ev) => {
+    if (ev.ctrlKey || ev.metaKey) void openEntry(e, true);
+    else void openEntry(e);
+  });
+  tr.addEventListener("auxclick", (ev) => {
+    if (ev.button === 1 && e.is_dir) {
       ev.preventDefault();
-      if (!state.selection.has(e.path)) {
-        state.selection.clear();
-        state.selection.add(e.path);
-        renderSelection();
-      }
-      showContextMenu(ev.clientX, ev.clientY, e);
-    });
-    body.appendChild(tr);
+      void openEntry(e, true);
+    }
+  });
+  tr.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    if (!state.selection.has(e.path)) {
+      state.selection.clear();
+      state.selection.add(e.path);
+      renderSelection();
+    }
+    showContextMenu(ev.clientX, ev.clientY, e);
+  });
+  return tr;
+}
+
+function renderTableFor(paneIdx: number): void {
+  const p = state.panes[paneIdx];
+  const suf = paneIdx === 0 ? "" : "-1";
+  const body = $(`file-body${suf}`);
+  body.innerHTML = "";
+  if (p.dupeGroups) {
+    // Grouped: a header row per group, then its files (size order).
+    for (const g of p.dupeGroups) {
+      const head = document.createElement("tr");
+      head.className = "dupe-head";
+      const td = document.createElement("td");
+      td.colSpan = 4;
+      td.textContent = `${g.entries.length} identical files · ${fmtSize(g.size)} each`;
+      head.appendChild(td);
+      body.appendChild(head);
+      for (const e of g.entries) body.appendChild(makeEntryRow(p, e));
+    }
+    return;
+  }
+  if (p.compareRows) {
+    // Grouped by side: only here, only there, then different.
+    const groups: [CompareRow["status"], string][] = [
+      ["only-here", "Only in this pane"],
+      ["only-there", "Only in the other pane"],
+      ["different", "Different"],
+    ];
+    for (const [status, label] of groups) {
+      const rows = p.compareRows.filter((r) => r.status === status);
+      if (rows.length === 0) continue;
+      const head = document.createElement("tr");
+      head.className = "dupe-head";
+      const td = document.createElement("td");
+      td.colSpan = 4;
+      td.textContent = `${label} · ${rows.length}`;
+      head.appendChild(td);
+      body.appendChild(head);
+      for (const r of rows) body.appendChild(makeEntryRow(p, r.entry));
+    }
+    return;
+  }
+  const groups = groupedEntries(p);
+  if (groups) {
+    for (const g of groups) {
+      body.appendChild(makeGroupHeadRow(p, g));
+      if (p.collapsedGroups.has(g.key)) continue;
+      for (const e of g.entries) body.appendChild(makeEntryRow(p, e));
+    }
+    return;
+  }
+  for (const e of p.filtered) body.appendChild(makeEntryRow(p, e));
+}
+
+function renderTable(): void {
+  renderTableFor(state.activePane);
+}
+
+// First-frame video thumbnails come from ffmpeg (a subprocess), NOT from a
+// <video> element: on this system WebKitGTK's media pipeline crashes the
+// Tile thumbnails (images + video first frames) come from the Rust `thumb`
+// command, which downscales and caches them on disk under ~/.cache. A
+// <video> element is not an option: it crashes this WebKitGTK the moment
+// one loads (GStreamer autoaudiosink is missing). SVG has no Rust decoder,
+// so those tiles keep loading directly via the asset protocol. Thumbnails
+// are fetched lazily when the tile scrolls into view; a missing ffmpeg, an
+// undecodable file, or a cache miss that fails just leaves the icon.
+const thumbCache = new Map<string, string>();
+
+async function requestThumb(tile: HTMLElement, e: Entry): Promise<void> {
+  const wrap = tile.querySelector(".tile-thumb-wrap");
+  if (!wrap || tile.dataset.thumb !== "pending") return;
+  const cached = thumbCache.get(e.path);
+  if (cached === "failed") {
+    tile.dataset.thumb = "failed";
+    return;
+  }
+  if (cached) {
+    const img = document.createElement("img");
+    img.className = "tile-thumb";
+    img.alt = "";
+    img.src = cached;
+    wrap.appendChild(img);
+    tile.dataset.thumb = "done";
+    return;
+  }
+  try {
+    const b64 = await invoke<string>("thumb", { path: e.path });
+    const url = `data:image/png;base64,${b64}`;
+    thumbCache.set(e.path, url);
+    if (!tile.isConnected || tile.dataset.thumb !== "pending") return;
+    const img = document.createElement("img");
+    img.className = "tile-thumb";
+    img.alt = "";
+    img.src = url;
+    wrap.appendChild(img);
+    tile.dataset.thumb = "done";
+  } catch {
+    thumbCache.set(e.path, "failed");
+    tile.dataset.thumb = "failed";
   }
 }
 
-function renderGrid(): void {
-  const wrap = $("grid-wrap");
-  wrap.innerHTML = "";
-  for (const e of state.filtered) {
-    const tile = document.createElement("button");
-    tile.type = "button";
-    tile.className = "tile";
-    if (state.selection.has(e.path)) tile.classList.add("is-selected");
-    tile.draggable = !state.isTrash;
-    tile.addEventListener("dragstart", (ev) => onDragStart(ev, e, tile));
-    tile.addEventListener("dragend", () => onDragEnd(tile));
-    if (e.is_dir) attachDropTarget(tile, () => e.path);
-    // Image files show a real thumbnail over the generic icon. The icon
-    // stays underneath as the fallback: a broken or unsupported image just
-    // drops its <img> and the icon shows through.
-    const iconWrap = document.createElement("span");
-    iconWrap.className = "tile-thumb-wrap";
-    iconWrap.innerHTML = iconSvg(iconFor(e), "icon tile-icon" + (e.is_dir ? " is-dir" : ""));
-    if (isImageEntry(e)) {
-      const img = document.createElement("img");
-      img.className = "tile-thumb";
-      img.alt = "";
-      img.loading = "lazy";
-      img.src = convertFileSrc(e.path);
-      img.addEventListener("error", () => img.remove());
-      iconWrap.appendChild(img);
-    }
-    const nameEl = document.createElement("span");
-    nameEl.className = "tile-name";
-    nameEl.textContent = e.name;
-    tile.append(iconWrap, nameEl);
-    if (state.isTrash && e.original_path) tile.title = e.original_path;
-    tile.addEventListener("click", (ev) => onRowClick(ev, e));
-    tile.addEventListener("dblclick", (ev) => {
-      if (ev.ctrlKey || ev.metaKey) void openEntry(e, true);
-      else void openEntry(e);
-    });
-    tile.addEventListener("auxclick", (ev) => {
-      if (ev.button === 1 && e.is_dir) {
-        ev.preventDefault();
-        void openEntry(e, true);
+let thumbObserver: IntersectionObserver | null = null;
+
+function thumbObserverFor(): IntersectionObserver {
+  if (thumbObserver) return thumbObserver;
+  thumbObserver = new IntersectionObserver(
+    (entries) => {
+      for (const en of entries) {
+        if (!en.isIntersecting) continue;
+        const tile = en.target as HTMLElement;
+        thumbObserver!.unobserve(tile);
+        const path = tile.dataset.path;
+        // Tiles live in either pane; the entry may be in either listing.
+        const entry = state.panes.flatMap((p) => p.filtered).find((x) => x.path === path);
+        if (entry) void requestThumb(tile, entry);
       }
-    });
-    tile.addEventListener("contextmenu", (ev) => {
-      ev.preventDefault();
-      if (!state.selection.has(e.path)) {
-        state.selection.clear();
-        state.selection.add(e.path);
-        renderSelection();
-      }
-      showContextMenu(ev.clientX, ev.clientY, e);
-    });
-    wrap.appendChild(tile);
+    },
+    { rootMargin: "200px" },
+  );
+  return thumbObserver;
+}
+
+function makeTile(p: Pane, e: Entry): HTMLButtonElement {
+  const pIsTrash = p.tabs[p.activeTab]?.isTrash ?? false;
+  const tile = document.createElement("button");
+  tile.type = "button";
+  tile.className = "tile";
+  tile.dataset.path = e.path;
+  if (p.selection.has(e.path)) tile.classList.add("is-selected");
+  tile.draggable = !pIsTrash;
+  tile.addEventListener("dragstart", (ev) => onDragStart(ev, e, tile));
+  tile.addEventListener("dragend", () => onDragEnd(tile));
+  if (e.is_dir) attachDropTarget(tile, () => e.path);
+  // Image files show a real thumbnail over the generic icon. The icon
+  // stays underneath as the fallback: a broken or unsupported image just
+  // drops its <img> and the icon shows through. SVG loads directly (the
+  // Rust thumbnailer has no SVG decoder); other images and video get a
+  // cached thumbnail, started lazily when the tile becomes visible.
+  const iconWrap = document.createElement("span");
+  iconWrap.className = "tile-thumb-wrap";
+  iconWrap.innerHTML = iconSvg(iconFor(e), "icon tile-icon" + (e.is_dir ? " is-dir" : ""));
+  if (isImageEntry(e) && e.extension === "svg") {
+    const img = document.createElement("img");
+    img.className = "tile-thumb";
+    img.alt = "";
+    img.loading = "lazy";
+    img.src = convertFileSrc(e.path);
+    img.addEventListener("error", () => img.remove());
+    iconWrap.appendChild(img);
+  } else if ((isImageEntry(e) && e.extension !== "svg") || (e.extension && VIDEO_EXTS.has(e.extension))) {
+    tile.dataset.thumb = "pending";
+    thumbObserverFor().observe(tile);
   }
+  const nameEl = document.createElement("span");
+  nameEl.className = "tile-name";
+  nameEl.textContent = e.name;
+  tile.append(iconWrap, nameEl);
+  if (pIsTrash && e.original_path) tile.title = e.original_path;
+  tile.addEventListener("click", (ev) => onRowClick(ev, e));
+  tile.addEventListener("dblclick", (ev) => {
+    if (ev.ctrlKey || ev.metaKey) void openEntry(e, true);
+    else void openEntry(e);
+  });
+  tile.addEventListener("auxclick", (ev) => {
+    if (ev.button === 1 && e.is_dir) {
+      ev.preventDefault();
+      void openEntry(e, true);
+    }
+  });
+  tile.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    if (!state.selection.has(e.path)) {
+      state.selection.clear();
+      state.selection.add(e.path);
+      renderSelection();
+    }
+    showContextMenu(ev.clientX, ev.clientY, e);
+  });
+  return tile;
+}
+
+function applyGridZoomFor(paneIdx: number): void {
+  const p = state.panes[paneIdx];
+  const suf = paneIdx === 0 ? "" : "-1";
+  const wrap = $(`grid-wrap${suf}`);
+  wrap.classList.remove("zoom-0", "zoom-1", "zoom-2");
+  wrap.classList.add(`zoom-${p.tabs[p.activeTab]?.zoom ?? 1}`);
+}
+
+function renderGridFor(paneIdx: number): void {
+  const p = state.panes[paneIdx];
+  const suf = paneIdx === 0 ? "" : "-1";
+  const wrap = $(`grid-wrap${suf}`);
+  // Unobserve only this pane's old tiles before clearing them: the
+  // observer is shared between panes, and a blanket disconnect() here
+  // would drop the other pane's tiles before they ever intersect, so
+  // their thumbnails would never load.
+  if (thumbObserver) for (const t of wrap.querySelectorAll(".tile")) thumbObserver.unobserve(t);
+  wrap.innerHTML = "";
+  wrap.classList.remove("is-grouped");
+  applyGridZoomFor(paneIdx);
+  const groups = groupedEntries(p);
+  if (groups) {
+    wrap.classList.add("is-grouped");
+    for (const g of groups) {
+      wrap.appendChild(makeGroupHeadDiv(p, g));
+      if (p.collapsedGroups.has(g.key)) continue;
+      const section = document.createElement("div");
+      section.className = "group-grid";
+      for (const e of g.entries) section.appendChild(makeTile(p, e));
+      wrap.appendChild(section);
+    }
+    return;
+  }
+  for (const e of p.filtered) wrap.appendChild(makeTile(p, e));
+}
+
+function renderGrid(): void {
+  renderGridFor(state.activePane);
 }
 
 /* ---- Drag & drop ---- */
@@ -787,6 +1607,13 @@ function onDragStart(ev: DragEvent, e: Entry, el: HTMLElement): void {
   if (ev.dataTransfer) {
     ev.dataTransfer.setData(DND_MIME, JSON.stringify(dragPaths));
     ev.dataTransfer.setData("text/plain", dragPaths.join("\n"));
+    // File URIs so the drag can leave the window: WebKitGTK turns this
+    // into a native drag other apps accept (copy into a folder, attach
+    // to a message, …). Internal drops still prefer DND_MIME above.
+    ev.dataTransfer.setData(
+      "text/uri-list",
+      dragPaths.map((p) => "file://" + encodeURI(p)).join("\r\n"),
+    );
     ev.dataTransfer.effectAllowed = "copyMove";
   }
   el.classList.add("dragging");
@@ -881,13 +1708,43 @@ async function runTransfer(paths: string[], dest: string, copy: boolean): Promis
   }
 }
 
+function renderSelectionFor(paneIdx: number): void {
+  const p = state.panes[paneIdx];
+  const suf = paneIdx === 0 ? "" : "-1";
+  document.querySelectorAll(`#file-body${suf} tr`).forEach((tr) => {
+    tr.classList.toggle("is-selected", p.selection.has((tr as HTMLTableRowElement).dataset.path ?? ""));
+  });
+  document.querySelectorAll(`#grid-wrap${suf} .tile`).forEach((t, i) => {
+    t.classList.toggle("is-selected", p.selection.has(p.filtered[i]?.path ?? ""));
+  });
+}
+
 function renderSelection(): void {
-  document.querySelectorAll("#file-body tr").forEach((tr) => {
-    tr.classList.toggle("is-selected", state.selection.has((tr as HTMLTableRowElement).dataset.path ?? ""));
-  });
-  document.querySelectorAll("#grid-wrap .tile").forEach((t, i) => {
-    t.classList.toggle("is-selected", state.selection.has(state.filtered[i]?.path ?? ""));
-  });
+  for (let i = 0; i < state.panes.length; i++) {
+    if (i === 1 && !state.dual) continue;
+    renderSelectionFor(i);
+    // Duplicate results: each pane's bar follows its own selection.
+    const p = state.panes[i];
+    const suf = i === 0 ? "" : "-1";
+    const bar = $(`dupe-bar${suf}`);
+    bar.hidden = p.dupeGroups === null;
+    if (p.dupeGroups) {
+      const del = $(`dupe-delete${suf}`) as HTMLButtonElement;
+      del.disabled = p.selection.size === 0;
+      del.textContent = `Delete selected (${p.selection.size})`;
+    }
+    // Compare results: each pane's bar follows its own rows.
+    const cbar = $(`compare-bar${suf}`);
+    cbar.hidden = p.compareRows === null;
+    if (p.compareRows) {
+      const out = $(`compare-copy-out${suf}`) as HTMLButtonElement;
+      const inn = $(`compare-copy-in${suf}`) as HTMLButtonElement;
+      out.disabled = !p.compareRows.some((r) => r.status === "only-here");
+      inn.disabled = !p.compareRows.some((r) => r.status === "only-there");
+      const sum = $(`compare-summary${suf}`) as HTMLElement;
+      if (p.compareSummary) sum.textContent = p.compareSummary;
+    }
+  }
   const n = state.selection.size;
   const has = n > 0;
   // Trash mode swaps the file-action buttons for Restore / Delete permanently.
@@ -926,29 +1783,61 @@ function renderSelection(): void {
 }
 
 // ---- Keyboard navigation (arrows move the selection, Enter opens) ----
-// The selection is a single entry after any arrow move; renderSelection()
-// updates the highlight, the toolbar, the status bar and the preview.
+// The selection is a single entry after any arrow move; Shift+arrow extends
+// a range from the anchor (the last plain-clicked or arrow-landed item).
+// renderSelection() updates the highlight, the toolbar, the status bar and
+// the preview.
 
-function moveSelectionTo(index: number): void {
+function moveSelectionTo(index: number, extend = false): void {
   const list = state.filtered;
   if (list.length === 0) return;
   const i = Math.max(0, Math.min(list.length - 1, index));
+  if (extend && state.anchor && state.selection.size > 0) {
+    const a = list.findIndex((e) => e.path === state.anchor);
+    if (a !== -1) {
+      const [lo, hi] = [Math.min(a, i), Math.max(a, i)];
+      state.selection.clear();
+      for (let j = lo; j <= hi; j++) state.selection.add(list[j].path);
+      renderSelection();
+      scrollSelectedIntoView(list[i].path);
+      return;
+    }
+  }
   state.selection.clear();
   state.selection.add(list[i].path);
+  state.anchor = list[i].path;
   renderSelection();
-  scrollSelectedIntoView();
+  scrollSelectedIntoView(list[i].path);
 }
 
-function moveSelection(delta: number): void {
+function moveSelection(delta: number, extend = false): void {
   const list = state.filtered;
   if (list.length === 0) return;
+  if (extend && state.anchor && state.selection.size > 0) {
+    const a = list.findIndex((e) => e.path === state.anchor);
+    if (a !== -1) {
+      // The focus is the selected end farthest from the anchor; extend from it.
+      let focus = a;
+      for (const p of state.selection) {
+        const idx = list.findIndex((e) => e.path === p);
+        if (idx !== -1 && Math.abs(idx - a) > Math.abs(focus - a)) focus = idx;
+      }
+      moveSelectionTo(focus + delta, true);
+      return;
+    }
+  }
   const current = list.findIndex((e) => state.selection.has(e.path));
   const next = current === -1 ? (delta > 0 ? 0 : list.length - 1) : current + delta;
   moveSelectionTo(next);
 }
 
+/** ID suffix for the active pane's file-area elements ("" for pane 0, "-1" for pane 1). */
+function paneSuffix(): string {
+  return state.activePane === 0 ? "" : "-1";
+}
+
 function gridColumns(): number {
-  const tiles = [...document.querySelectorAll("#grid-wrap .tile")] as HTMLElement[];
+  const tiles = [...document.querySelectorAll(`#grid-wrap${paneSuffix()} .tile`)] as HTMLElement[];
   if (tiles.length === 0) return 1;
   const top = tiles[0].offsetTop;
   let n = 0;
@@ -960,35 +1849,44 @@ function gridColumns(): number {
 }
 
 function pageStep(): number {
-  const area = $("file-area");
-  const first = (document.querySelector("#file-body tr") ??
-    document.querySelector("#grid-wrap .tile")) as HTMLElement | null;
+  const area = $(`file-area${paneSuffix()}`);
+  const first = (document.querySelector(`#file-body${paneSuffix()} tr`) ??
+    document.querySelector(`#grid-wrap${paneSuffix()} .tile`)) as HTMLElement | null;
   const h = first ? first.offsetHeight : 32;
   return Math.max(1, Math.floor(area.clientHeight / Math.max(1, h)));
 }
 
-function scrollSelectedIntoView(): void {
-  const path = state.selection.values().next().value;
+function scrollSelectedIntoView(focusPath?: string): void {
+  const path = focusPath ?? state.selection.values().next().value;
   if (!path) return;
-  for (const tr of document.querySelectorAll("#file-body tr")) {
+  const suf = paneSuffix();
+  for (const tr of document.querySelectorAll(`#file-body${suf} tr`)) {
     if ((tr as HTMLTableRowElement).dataset.path === path) {
       tr.scrollIntoView({ block: "nearest" });
       return;
     }
   }
   const idx = state.filtered.findIndex((e) => e.path === path);
-  const tile = document.querySelectorAll("#grid-wrap .tile")[idx] as HTMLElement | undefined;
+  const tile = document.querySelectorAll(`#grid-wrap${suf} .tile`)[idx] as HTMLElement | undefined;
   tile?.scrollIntoView({ block: "nearest" });
 }
 
 function renderStatus(): void {
   const total = state.entries.length;
   const shown = state.filtered.length;
-  $("status-count").textContent = state.searching
-    ? `${shown} results for “${state.searchQuery}”`
-    : shown === total
-      ? `${total} items`
-      : `${shown} of ${total} items`;
+  if (state.dupeGroups) {
+    const files = state.dupeGroups.reduce((n, g) => n + g.entries.length, 0);
+    $("status-count").textContent = `${state.dupeGroups.length} duplicate groups · ${files} files`;
+  } else if (state.compareRows) {
+    $("status-count").textContent = state.compareSummary ?? `${shown} compare rows`;
+  } else if (state.searching) {
+    $("status-count").textContent = state.contentMatches
+      ? `${shown} content matches for “${state.searchQuery}”`
+      : `${shown} results for “${state.searchQuery}”`;
+  } else {
+    $("status-count").textContent =
+      shown === total ? `${total} items` : `${shown} of ${total} items`;
+  }
   const d = driveFor(state.path);
   if (d) {
     $("status-drive").textContent = `${fmtSize(d.free)} free of ${fmtSize(d.total)} on ${d.mount}`;
@@ -999,17 +1897,36 @@ function renderStatus(): void {
   }
 }
 
+function renderPaneHeads(): void {
+  for (let i = 0; i < state.panes.length; i++) {
+    if (i === 1 && !state.dual) continue;
+    const suf = i === 0 ? "" : "-1";
+    const el = $(`pane-head${suf}`) as HTMLElement | null;
+    if (!el) continue;
+    const tab = state.panes[i].tabs[state.panes[i].activeTab];
+    el.textContent = tab?.isTrash ? "Trash" : tab?.path ?? "";
+    el.classList.toggle("is-active", i === state.activePane);
+  }
+}
+
 function render(): void {
-  applyFilterSort();
+  for (let i = 0; i < state.panes.length; i++) {
+    if (i === 1 && !state.dual) continue;
+    const p = state.panes[i];
+    const suf = i === 0 ? "" : "-1";
+    applyFilterSortFor(p);
+    renderTableFor(i);
+    renderGridFor(i);
+    const tab = p.tabs[p.activeTab];
+    $(`table-wrap${suf}`).hidden = tab?.view !== "details";
+    $(`grid-wrap${suf}`).hidden = tab?.view !== "icons";
+  }
   renderCrumbs();
   renderTabs();
-  renderTable();
-  renderGrid();
   renderStatus();
   renderSelection();
   updateTrashNav();
-  $("table-wrap").hidden = state.view !== "details";
-  $("grid-wrap").hidden = state.view !== "icons";
+  renderPaneHeads();
   $("view-details").classList.toggle("is-active", state.view === "details");
   $("view-icons").classList.toggle("is-active", state.view === "icons");
   // In Trash the Date column is the deletion date, not the modification date.
@@ -1019,56 +1936,129 @@ function render(): void {
   if (dateOpt) dateOpt.textContent = state.isTrash ? "Date deleted" : "Date modified";
 }
 
-function showState(which: "loading" | "empty" | "error" | "full"): void {
-  $("loading").hidden = which !== "loading";
-  $("empty").hidden = which !== "empty";
-  $("error").hidden = which !== "error";
-  $("table-wrap").hidden = which !== "full" || state.view !== "details";
-  $("grid-wrap").hidden = which !== "full" || state.view !== "icons";
+function showStateFor(which: "loading" | "empty" | "error" | "full", paneIdx = state.activePane): void {
+  const suf = paneIdx === 0 ? "" : "-1";
+  const tab = state.panes[paneIdx].tabs[state.panes[paneIdx].activeTab];
+  $(`loading${suf}`).hidden = which !== "loading";
+  $(`empty${suf}`).hidden = which !== "empty";
+  $(`error${suf}`).hidden = which !== "error";
+  $(`table-wrap${suf}`).hidden = which !== "full" || tab?.view !== "details";
+  $(`grid-wrap${suf}`).hidden = which !== "full" || tab?.view !== "icons";
+  if (which === "empty") updateEmptyStateFor(paneIdx);
 }
 
-async function loadDir(): Promise<void> {
-  folderSizeCache.clear();
-  showState("loading");
-  try {
-    const entries = state.isTrash
-      ? await invoke<Entry[]>("list_trash")
-      : await invoke<Entry[]>("list_dir", { path: state.path });
-    state.entries = entries;
+// The empty state says why the listing is empty, not just that it is:
+// Trash, a search with no hits, a name filter with no match, or a folder
+// that really has nothing in it. The Clear search button only appears
+// when a filter is what emptied the listing.
+function updateEmptyStateFor(paneIdx: number): void {
+  const p = state.panes[paneIdx];
+  const suf = paneIdx === 0 ? "" : "-1";
+  const el = $(`empty${suf}`) as HTMLElement;
+  const h2 = el.querySelector("h2")!;
+  const para = el.querySelector("p")!;
+  const newFolderBtn = $(`empty-new-folder${suf}`) as HTMLButtonElement;
+  const clearBtn = $(`empty-clear-search${suf}`) as HTMLButtonElement;
+  const tab = p.tabs[p.activeTab];
+  const q = p.searchQuery.trim();
+  clearBtn.hidden = true;
+  if (tab?.isTrash) {
+    h2.textContent = "Trash is empty";
+    para.textContent = "Deleted items will appear here. You can restore them or delete them permanently.";
+    newFolderBtn.hidden = true;
+  } else if (p.searching && p.contentMode) {
+    h2.textContent = "No content matches";
+    para.textContent = `No file under this folder contains “${q}”.`;
+    newFolderBtn.hidden = true;
+    clearBtn.hidden = false;
+  } else if (p.searching) {
+    h2.textContent = "No results";
+    para.textContent = `Nothing under this folder matches “${q}”.`;
+    newFolderBtn.hidden = true;
+    clearBtn.hidden = false;
+  } else if (q) {
+    h2.textContent = `No matches for “${q}”`;
+    para.textContent = "Try a different name, or clear the search to see everything in this folder.";
+    newFolderBtn.hidden = true;
+    clearBtn.hidden = false;
+  } else {
+    h2.textContent = "This folder is empty";
+    para.textContent = "Nothing here yet. Create a folder or paste files into it.";
+    newFolderBtn.hidden = false;
+  }
+}
+
+function clearSearch(): void {
+  const search = $("search") as HTMLInputElement;
+  search.value = "";
+  if (state.searching) void navigate(state.path, false);
+  else {
+    state.searchQuery = "";
     render();
-    const emptyEl = $("empty") as HTMLElement;
-    if (state.isTrash) {
-      emptyEl.querySelector("h2")!.textContent = "Trash is empty";
-      emptyEl.querySelector("p")!.textContent = "Deleted items will appear here. You can restore them or delete them permanently.";
-      ($("empty-new-folder") as HTMLButtonElement).hidden = true;
-    } else {
-      emptyEl.querySelector("h2")!.textContent = "This folder is empty";
-      emptyEl.querySelector("p")!.textContent = "Nothing here yet. Create a folder or paste files into it.";
-      ($("empty-new-folder") as HTMLButtonElement).hidden = false;
-    }
     showState(state.filtered.length === 0 ? "empty" : "full");
+  }
+}
+
+function showState(which: "loading" | "empty" | "error" | "full"): void {
+  showStateFor(which, state.activePane);
+}
+
+async function loadDirFor(paneIdx: number): Promise<void> {
+  const p = state.panes[paneIdx];
+  const suf = paneIdx === 0 ? "" : "-1";
+  // A fresh listing leaves the result modes behind: content matches,
+  // duplicate groups and compare rows describe the previous listing.
+  p.contentMatches = null;
+  p.dupeGroups = null;
+  p.compareRows = null;
+  p.compareSummary = null;
+  // Drop only this pane's previous folder sizes: the other pane keeps its
+  // cached sizes, and this pane never shows a size computed for a previous
+  // state of a folder.
+  for (const e of p.entries) if (e.is_dir) folderSizeCache.delete(e.path);
+  showStateFor("loading", paneIdx);
+  try {
+    const tab = p.tabs[p.activeTab];
+    const entries = tab?.isTrash
+      ? await invoke<Entry[]>("list_trash")
+      : await invoke<Entry[]>("list_dir", { path: tab?.path ?? "" });
+    p.entries = entries;
+    render();
+    showStateFor(p.filtered.length === 0 ? "empty" : "full", paneIdx);
     renderStatus();
-    void requestFolderSizes();
+    void requestFolderSizesFor(paneIdx);
   } catch (err) {
-    $("error-text").textContent = String(err);
-    showState("error");
+    $(`error-text${suf}`).textContent = String(err);
+    showStateFor("error", paneIdx);
     renderCrumbs();
     renderStatus();
   }
+}
+
+async function loadDir(): Promise<void> {
+  return loadDirFor(state.activePane);
 }
 
 function onRowClick(ev: MouseEvent, e: Entry): void {
   if (ev.ctrlKey || ev.metaKey) {
     if (state.selection.has(e.path)) state.selection.delete(e.path);
     else state.selection.add(e.path);
+    // The anchor follows the last clicked item (Explorer behaviour), so a
+    // later Shift+click or Shift+arrow extends from here.
+    state.anchor = e.path;
   } else if (ev.shiftKey && state.selection.size > 0) {
     const idx = state.filtered.findIndex((x) => x.path === e.path);
-    const anchor = state.filtered.findIndex((x) => state.selection.has(x.path));
-    const [a, b] = [Math.min(idx, anchor), Math.max(idx, anchor)];
-    for (let i = a; i <= b; i++) state.selection.add(state.filtered[i].path);
+    const anchorIdx = state.anchor
+      ? state.filtered.findIndex((x) => x.path === state.anchor)
+      : state.filtered.findIndex((x) => state.selection.has(x.path));
+    if (idx !== -1 && anchorIdx !== -1) {
+      const [a, b] = [Math.min(idx, anchorIdx), Math.max(idx, anchorIdx)];
+      for (let i = a; i <= b; i++) state.selection.add(state.filtered[i].path);
+    }
   } else {
     state.selection.clear();
     state.selection.add(e.path);
+    state.anchor = e.path;
   }
   renderSelection();
 }
@@ -1137,6 +2127,330 @@ async function doExtract(): Promise<void> {
     await loadDir();
   } catch (err) {
     toast(`Extract failed: ${err}`, true);
+  }
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Clipboard API unavailable (or denied): fall back to execCommand.
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+async function doCopyPath(): Promise<void> {
+  const paths = [...state.selection];
+  const text = paths.length > 0 ? paths.join("\n") : state.path;
+  if (await copyText(text)) {
+    toast(paths.length > 1 ? `${paths.length} paths copied` : "Path copied");
+  } else {
+    toast("Could not copy to clipboard", true);
+  }
+}
+
+/* ---- Open With ---- */
+
+async function askOpenWith(e: Entry): Promise<void> {
+  const dlg = $("dlg-open-with") as HTMLDialogElement;
+  ($("open-with-title") as HTMLElement).textContent = `Open ${e.name} with`;
+  const list = $("open-with-list");
+  list.innerHTML = "";
+  ($("open-with-empty") as HTMLElement).hidden = true;
+  ($("open-with-default") as HTMLButtonElement).hidden = true;
+  ($("open-with-always") as HTMLInputElement).checked = false;
+  try {
+    const apps = await invoke<AppInfo[]>("list_apps_for", { path: e.path });
+    if (apps.length === 0) {
+      ($("open-with-empty") as HTMLElement).hidden = false;
+      ($("open-with-default") as HTMLButtonElement).hidden = false;
+    }
+    for (const app of apps) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ctx-item";
+      b.textContent = app.name;
+      b.addEventListener("click", () => {
+        // App buttons are type="button": no form submit fires, so the
+        // dialog is dismissed explicitly here (dialog bug-class sweep).
+        const always = ($("open-with-always") as HTMLInputElement).checked;
+        dlg.close();
+        void doOpenWith(e, app, always);
+      });
+      list.appendChild(b);
+    }
+    ($("open-with-default") as HTMLButtonElement).onclick = () => {
+      dlg.close();
+      void openEntry(e);
+    };
+    dlg.showModal();
+  } catch (err) {
+    toast(`Could not list applications: ${err}`, true);
+  }
+}
+
+async function doOpenWith(e: Entry, app: AppInfo, always = false): Promise<void> {
+  if (always) {
+    try {
+      await invoke("set_default_app", { path: e.path, desktop: app.desktop });
+      toast(`${app.name} is now the default for ${e.extension ? `.${e.extension}` : "this type"}`);
+    } catch (err) {
+      toast(`Could not set the default app: ${err}`, true);
+    }
+  }
+  try {
+    await invoke("open_with", { path: e.path, exec: app.exec });
+  } catch (err) {
+    toast(`Could not open with ${app.name}: ${err}`, true);
+  }
+}
+
+/* ---- Batch rename ---- */
+
+type BatchOpts = {
+  find: string;
+  replace: string;
+  prefix: string;
+  suffix: string;
+  number: boolean;
+  start: number;
+  pad: number;
+};
+
+function splitStem(name: string): [string, string] {
+  const i = name.lastIndexOf(".");
+  if (i <= 0) return [name, ""];
+  return [name.slice(0, i), name.slice(i)];
+}
+
+function batchNewName(name: string, o: BatchOpts, i: number): string {
+  const [stem, ext] = splitStem(name);
+  let s = stem;
+  if (o.find) s = s.split(o.find).join(o.replace);
+  if (o.number) s = `${String(o.start + i).padStart(o.pad, "0")} ${s}`;
+  return o.prefix + s + o.suffix + ext;
+}
+
+function batchOpts(): BatchOpts {
+  return {
+    find: ($("batch-find") as HTMLInputElement).value,
+    replace: ($("batch-replace") as HTMLInputElement).value,
+    prefix: ($("batch-prefix") as HTMLInputElement).value,
+    suffix: ($("batch-suffix") as HTMLInputElement).value,
+    number: ($("batch-number") as HTMLInputElement).checked,
+    start: Number(($("batch-num-start") as HTMLInputElement).value) || 0,
+    pad: Math.max(1, Math.min(6, Number(($("batch-num-pad") as HTMLInputElement).value) || 2)),
+  };
+}
+
+/** Live preview + collision check. Returns false when Apply must stay disabled. */
+function updateBatchPreview(): boolean {
+  const items = selectedEntries();
+  const o = batchOpts();
+  const preview = $("batch-preview");
+  preview.innerHTML = "";
+  const seen = new Set<string>();
+  let ok = true;
+  items.slice(0, 8).forEach((e, i) => {
+    const next = batchNewName(e.name, o, i);
+    const line = document.createElement("div");
+    line.className = "batch-line";
+    const collision = next === "" || seen.has(next);
+    if (collision) ok = false;
+    seen.add(next);
+    line.innerHTML = `<span>${escapeHtml(e.name)}</span> <span class="batch-arrow">→</span> <span class="${collision ? "batch-collision" : ""}">${escapeHtml(next || "(empty name)")}</span>`;
+    preview.appendChild(line);
+  });
+  if (items.length > 8) {
+    const more = document.createElement("div");
+    more.className = "batch-line";
+    more.textContent = `…and ${items.length - 8} more`;
+    preview.appendChild(more);
+  }
+  const err = $("batch-error");
+  if (!ok) {
+    err.textContent = "Two files would get the same name (or an empty name). Adjust the pattern.";
+    err.hidden = false;
+  } else {
+    err.hidden = true;
+  }
+  ($("batch-confirm") as HTMLButtonElement).disabled = !ok || items.length === 0;
+  return ok;
+}
+
+function askBatchRename(): void {
+  const items = selectedEntries();
+  if (items.length === 0) return;
+  ($("batch-count") as HTMLElement).textContent = `${items.length} item${items.length === 1 ? "" : "s"} selected`;
+  for (const id of ["batch-find", "batch-replace", "batch-prefix", "batch-suffix"]) {
+    ($ (id) as HTMLInputElement).value = "";
+  }
+  ($("batch-number") as HTMLInputElement).checked = false;
+  ($("batch-num-start") as HTMLInputElement).value = "1";
+  ($("batch-num-pad") as HTMLInputElement).value = "2";
+  ($("batch-error") as HTMLElement).hidden = true;
+  updateBatchPreview();
+  ($("dlg-batch") as HTMLDialogElement).showModal();
+}
+
+async function doBatchRename(): Promise<void> {
+  const items = selectedEntries();
+  if (items.length === 0) return;
+  if (!updateBatchPreview()) return; // collision — dialog stays open
+  const o = batchOpts();
+  // The confirm button preventDefaults the form submit (which would close
+  // the dialog), so dismiss it here: confirming ends the dialog's job.
+  ($("dlg-batch") as HTMLDialogElement).close();
+  let done = 0;
+  let failed = 0;
+  let firstErr = "";
+  for (let i = 0; i < items.length; i++) {
+    const next = batchNewName(items[i].name, o, i);
+    if (next === items[i].name) continue;
+    try {
+      await invoke("rename_path", { path: items[i].path, new_name: next });
+      done++;
+    } catch (err) {
+      failed++;
+      if (!firstErr) firstErr = String(err);
+    }
+  }
+  if (failed === 0) toast(`${done} item${done === 1 ? "" : "s"} renamed`);
+  else toast(`${done} renamed, ${failed} failed: ${firstErr}`, true);
+  await loadDir();
+}
+
+/* ---- Duplicate finder ---- */
+
+async function runDupes(): Promise<void> {
+  if (state.isTrash) {
+    toast("Find duplicates is not available in Trash");
+    return;
+  }
+  try {
+    const groups = await invoke<DupeGroup[]>("find_duplicates", { root: state.path });
+    if (groups.length === 0) {
+      toast("No duplicate files found in this folder");
+      // Refreshing after deleting the last duplicates lands here: leave
+      // the results mode instead of showing the stale groups.
+      state.dupeGroups = null;
+      await loadDir();
+      return;
+    }
+    state.dupeGroups = groups;
+    state.entries = groups.flatMap((g) => g.entries);
+    // Keep the first file of each group, pre-select the rest for deletion.
+    state.selection.clear();
+    for (const g of groups) {
+      for (const e of g.entries.slice(1)) state.selection.add(e.path);
+    }
+    const files = groups.reduce((n, g) => n + g.entries.length, 0);
+    ($("dupe-summary") as HTMLElement).textContent =
+      `${groups.length} duplicate groups · ${files} files · first of each group kept`;
+    render();
+    showState("full");
+  } catch (err) {
+    toast(`Find duplicates failed: ${err}`, true);
+  }
+}
+
+async function deleteSelectedDupes(): Promise<void> {
+  const paths = [...state.selection];
+  if (paths.length === 0) return;
+  try {
+    const n = await invoke<number>("delete_paths", { paths });
+    toast(`${n} item${n === 1 ? "" : "s"} moved to Trash`);
+    await runDupes();
+    if (!state.dupeGroups) await loadDir();
+  } catch (err) {
+    toast(`Delete failed: ${err}`, true);
+  }
+}
+
+async function exitDupes(): Promise<void> {
+  state.dupeGroups = null;
+  await loadDir();
+}
+
+/* ---- Compare folders (dual pane) ---- */
+// Compares the two panes' folders by name at the top level: same-name
+// files are "same" when size and content hash match; folders with the same
+// name are not recursed into. Rows are relative to the pane the compare
+// was run from: only-here / only-there / different.
+
+async function runCompare(): Promise<void> {
+  if (!state.dual) {
+    toast("Compare needs dual pane (Ctrl+Shift+D)", true);
+    return;
+  }
+  const other = 1 - state.activePane;
+  const tabA = state.panes[state.activePane].tabs[state.panes[state.activePane].activeTab];
+  const tabB = state.panes[other].tabs[state.panes[other].activeTab];
+  if (!tabA || !tabB || tabA.isTrash || tabB.isTrash) {
+    toast("Compare is not available in Trash", true);
+    return;
+  }
+  try {
+    const res = await invoke<CompareResult>("compare_dirs", { a: tabA.path, b: tabB.path, includeHidden: state.showHidden });
+    const rows: CompareRow[] = [
+      ...res.only_a.map((e) => ({ entry: e, status: "only-here" as const })),
+      ...res.only_b.map((e) => ({ entry: e, status: "only-there" as const })),
+      ...res.different.map((e) => ({ entry: e, status: "different" as const })),
+    ];
+    state.compareRows = rows;
+    state.compareSummary =
+      `${res.only_a.length} only here · ${res.only_b.length} only there · ${res.different.length} different · ${res.same} identical (top level only)`;
+    state.entries = rows.map((r) => r.entry);
+    render();
+    showState("full");
+  } catch (err) {
+    toast(`Compare failed: ${err}`, true);
+  }
+}
+
+async function exitCompare(): Promise<void> {
+  state.compareRows = null;
+  state.compareSummary = null;
+  await loadDir();
+}
+
+/** Copy the files that exist only on one side to the other side, then
+ * re-run the compare so the result updates. `toOther` false means the
+ * missing files come from the other pane into this one. */
+async function copyMissing(toOther: boolean): Promise<void> {
+  if (!state.compareRows) return;
+  const other = 1 - state.activePane;
+  const tab = state.panes[other].tabs[state.panes[other].activeTab];
+  if (!tab || tab.isTrash) {
+    toast("The other pane is showing the Trash", true);
+    return;
+  }
+  const here = state.panes[state.activePane].tabs[state.panes[state.activePane].activeTab]?.path ?? "";
+  const rows = state.compareRows.filter((r) =>
+    toOther ? r.status === "only-here" : r.status === "only-there",
+  );
+  if (rows.length === 0) {
+    toast("Nothing missing on that side");
+    return;
+  }
+  const dest = toOther ? tab.path : here;
+  const outcome = await runTransfer(rows.map((r) => r.entry.path), dest, true);
+  if (outcome) {
+    await loadDirFor(other);
+    await runCompare();
   }
 }
 
@@ -1258,7 +2572,6 @@ async function showProperties(): Promise<void> {
       ["Location", p.path.slice(0, p.path.length - p.name.length) || "/"],
       ["Size", p.is_dir ? `${fmtSize(p.size)} (${p.items ?? 0} items)` : fmtSize(p.size)],
       ["Modified", fmtDate(p.modified)],
-      ["Permissions", p.permissions],
     ];
     for (const [k, v] of rows) {
       const div = document.createElement("div");
@@ -1269,14 +2582,170 @@ async function showProperties(): Promise<void> {
       div.append(dt, dd);
       body.appendChild(div);
     }
+    // Permissions editor: octal input + Apply (type="button" so the
+    // <form method="dialog"> never submits and closes the dialog early).
+    const permDiv = document.createElement("div");
+    const permDt = document.createElement("dt");
+    permDt.textContent = "Permissions";
+    const permDd = document.createElement("dd");
+    permDd.className = "props-perm";
+    const permInput = document.createElement("input");
+    permInput.id = "props-mode";
+    permInput.className = "mono";
+    permInput.value = p.permissions;
+    permInput.maxLength = 4;
+    permInput.size = 5;
+    permInput.setAttribute("aria-label", "Permissions in octal");
+    const permBtn = document.createElement("button");
+    permBtn.type = "button";
+    permBtn.className = "btn btn-outline";
+    permBtn.textContent = "Apply";
+    const permMsg = document.createElement("span");
+    permMsg.className = "props-msg";
+    permBtn.addEventListener("click", async () => {
+      const raw = permInput.value.trim();
+      if (!/^[0-7]{3,4}$/.test(raw)) {
+        permMsg.textContent = "Octal, e.g. 644";
+        return;
+      }
+      try {
+        const mode = await invoke<string>("set_permissions", { path: items[0].path, mode: parseInt(raw, 8) });
+        permInput.value = mode;
+        permMsg.textContent = "Applied";
+        toast(`Permissions set to ${mode}`);
+      } catch (err) {
+        permMsg.textContent = `Failed: ${err}`;
+      }
+    });
+    permDd.append(permInput, permBtn, permMsg);
+    permDiv.append(permDt, permDd);
+    body.appendChild(permDiv);
+    // SHA-256 for files, computed after the dialog opens so the dialog
+    // itself never waits on a big file.
+    if (!p.is_dir) {
+      const shaDiv = document.createElement("div");
+      const shaDt = document.createElement("dt");
+      shaDt.textContent = "SHA-256";
+      const shaDd = document.createElement("dd");
+      shaDd.className = "props-perm";
+      const shaSpan = document.createElement("span");
+      shaSpan.className = "mono props-sha";
+      shaSpan.textContent = "Computing…";
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.id = "props-copy-sha";
+      copyBtn.className = "btn btn-outline";
+      copyBtn.textContent = "Copy";
+      copyBtn.disabled = true;
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(shaSpan.textContent ?? "");
+          toast("SHA-256 copied");
+        } catch {
+          toast("Could not copy to clipboard", true);
+        }
+      });
+      shaDd.append(shaSpan, copyBtn);
+      shaDiv.append(shaDt, shaDd);
+      body.appendChild(shaDiv);
+    }
     ($("dlg-props") as HTMLDialogElement).showModal();
+    // SHA-256 runs after the dialog opens so a big file never delays it.
+    if (!p.is_dir) {
+      try {
+        const hash = await invoke<string>("file_sha256", { path: items[0].path });
+        const shaSpan = document.querySelector(".props-sha");
+        if (shaSpan) shaSpan.textContent = hash;
+        const copyBtn = document.getElementById("props-copy-sha") as HTMLButtonElement | null;
+        if (copyBtn) copyBtn.disabled = false;
+      } catch {
+        const shaSpan = document.querySelector(".props-sha");
+        if (shaSpan) shaSpan.textContent = "Unavailable";
+      }
+    }
   } catch (err) {
     toast(`Could not read properties: ${err}`, true);
   }
 }
 
+let previewGen = 0;
+
+// Syntax highlighting for the preview pane. One pass over the line, so a
+// span never nests inside another span: strings, comments, numbers and
+// keywords are classified by a single combined regex. Only & < > are
+// escaped (quotes stay raw so the string alternative can match them).
+const CODE_KEYWORDS: Record<string, Set<string>> = {
+  clike: new Set("fn let mut pub struct enum impl trait use mod const static if else match for while loop return break continue in where type ref self Self crate super async await move dyn unsafe extern as true false null this new class extends implements import export from try catch finally throw void int string bool float double char switch case default do sizeof typedef namespace template typename virtual override final friend inline explicit operator delete sizeof".split(" ")),
+  python: new Set("def class import from as return if elif else for while try except finally with lambda pass break continue True False None and or not in is print yield async await global nonlocal raise del assert".split(" ")),
+  shell: new Set("if then else elif fi for while do done case esac function return echo exit in select until".split(" ")),
+};
+// Language family per extension: comment marker + keyword set. HTML/XML
+// get tag highlighting instead of keywords.
+const CODE_LANG: Record<string, { comment: string; kw: string; tag?: boolean }> = {
+  rs: { comment: "//", kw: "clike" },
+  js: { comment: "//", kw: "clike" },
+  ts: { comment: "//", kw: "clike" },
+  jsx: { comment: "//", kw: "clike" },
+  tsx: { comment: "//", kw: "clike" },
+  c: { comment: "//", kw: "clike" },
+  h: { comment: "//", kw: "clike" },
+  cpp: { comment: "//", kw: "clike" },
+  hpp: { comment: "//", kw: "clike" },
+  go: { comment: "//", kw: "clike" },
+  java: { comment: "//", kw: "clike" },
+  rb: { comment: "#", kw: "clike" },
+  php: { comment: "//", kw: "clike" },
+  swift: { comment: "//", kw: "clike" },
+  kt: { comment: "//", kw: "clike" },
+  py: { comment: "#", kw: "python" },
+  sh: { comment: "#", kw: "shell" },
+  toml: { comment: "#", kw: "shell" },
+  yaml: { comment: "#", kw: "shell" },
+  yml: { comment: "#", kw: "shell" },
+  html: { comment: "<!--", kw: "clike", tag: true },
+  xml: { comment: "<!--", kw: "clike", tag: true },
+  css: { comment: "/*", kw: "clike" },
+  scss: { comment: "//", kw: "clike" },
+  json: { comment: "//", kw: "clike" },
+};
+
+function highlightCodeLine(line: string, ext: string): string {
+  const lang = CODE_LANG[ext] ?? { comment: "//", kw: "clike" };
+  const esc = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const commentAlt =
+    lang.comment === "#"
+      ? "#.*"
+      : lang.comment === "<!--"
+        ? "&lt;!--.*?--&gt;"
+        : lang.comment === "/*"
+          ? "/\\*[\\s\\S]*?\\*/"
+          : "//.*";
+  const re = new RegExp(
+    `("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*')|(${commentAlt})|(\\b\\d+(?:\\.\\d+)?\\b)` +
+      (lang.tag ? `|(&lt;\\/?[a-zA-Z][^&]*?&gt;)` : ``) +
+      `|(\\b[a-zA-Z_][a-zA-Z0-9_]*\\b)`,
+    "g",
+  );
+  const kws = CODE_KEYWORDS[lang.kw];
+  // Classify by the match's own shape, not by capture-group position:
+  // the tag alternative exists only for HTML/XML, so the group indices
+  // shift between languages and a positional replacer mislabels words.
+  return esc.replace(re, (m) => {
+    if (m.startsWith('"') || m.startsWith("'")) return `<span class="tok-str">${m}</span>`;
+    if (m.startsWith("/") || m.startsWith("#") || m.startsWith("&lt;!--")) return `<span class="tok-com">${m}</span>`;
+    if (/^\d/.test(m)) return `<span class="tok-num">${m}</span>`;
+    if (m.startsWith("&lt;")) return `<span class="tok-tag">${m}</span>`;
+    if (kws.has(m)) return `<span class="tok-kw">${m}</span>`;
+    return m;
+  });
+}
 async function updatePreview(): Promise<void> {
   if (!state.previewOpen) return;
+  // A newer preview supersedes this one: the folder/text branches await a
+  // backend call, and a stale one resolving late must not overwrite the
+  // preview the user is looking at now (it used to clobber an image
+  // preview with the previous folder's "Folder" note).
+  const gen = ++previewGen;
   const body = $("preview-body");
   const items = selectedEntries();
   if (items.length !== 1) {
@@ -1289,33 +2758,81 @@ async function updatePreview(): Promise<void> {
   if (e.is_dir) {
     try {
       const p = await invoke<Properties>("get_properties", { path: e.path });
+      if (gen !== previewGen) return;
       body.innerHTML = `<dl class="detail-grid"><div><dt>Type</dt><dd>Folder</dd></div><div><dt>Size</dt><dd>${fmtSize(p.size)}</dd></div><div><dt>Items</dt><dd>${p.items ?? 0}</dd></div><div><dt>Modified</dt><dd>${fmtDate(p.modified)}</dd></div></dl>`;
     } catch {
+      if (gen !== previewGen) return;
       body.innerHTML = `<p class="preview-note">Folder</p>`;
     }
     return;
   }
   if (e.extension && IMAGE_EXTS.has(e.extension)) {
     const url = convertFileSrc(e.path);
+    const wrap = document.createElement("div");
+    wrap.className = "preview-img-wrap";
     const img = document.createElement("img");
     img.className = "preview-img";
     img.src = url;
     img.alt = `Preview of ${e.name}`;
+    img.title = "Click to toggle actual size";
     img.onerror = () => {
       body.innerHTML = `<p class="preview-note">Could not preview this image.</p>`;
     };
+    // Click toggles fit-width vs actual size; the caption shows the
+    // dimensions once the image has loaded.
+    const caption = document.createElement("p");
+    caption.className = "preview-caption";
+    caption.textContent = fmtSize(e.size ?? 0);
+    img.onload = () => {
+      if (gen !== previewGen) return;
+      caption.textContent = `${img.naturalWidth} × ${img.naturalHeight} · ${fmtSize(e.size ?? 0)}`;
+    };
+    img.addEventListener("click", () => img.classList.toggle("is-zoomed"));
+    wrap.append(img, caption);
     body.innerHTML = "";
-    body.appendChild(img);
+    body.appendChild(wrap);
     return;
+  }
+  if (e.extension === "pdf") {
+    // WebKitGTK renders PDFs natively in an <embed>; if this engine ever
+    // stops doing so the fallback button still opens the file's app.
+    body.innerHTML = "";
+    body.appendChild(makePdfPreview(e));
+    return;
+  }
+  if (e.extension && ARCHIVE_EXTS.has(e.extension)) {
+    try {
+      const entries = await invoke<ArchiveEntry[]>("list_archive", { path: e.path });
+      if (gen !== previewGen) return;
+      body.innerHTML = "";
+      body.appendChild(makeArchivePreview(e, entries));
+      return;
+    } catch {
+      /* not a readable archive — fall through to summary */
+    }
+  }
+  if ((e.extension === "md" || e.extension === "markdown") && (e.size ?? 0) < 200_000) {
+    try {
+      const text = await invoke<string>("read_text", { path: e.path });
+      if (gen !== previewGen) return;
+      const div = document.createElement("div");
+      div.className = "md-preview";
+      div.innerHTML = renderMarkdown(text);
+      body.innerHTML = "";
+      body.appendChild(div);
+      return;
+    } catch {
+      /* fall through to summary */
+    }
   }
   if (e.extension && TEXT_EXTS.has(e.extension) && (e.size ?? 0) < 200_000) {
     try {
       const text = await invoke<string>("read_text", { path: e.path });
-      const pre = document.createElement("pre");
-      pre.className = "preview-text";
-      pre.textContent = text;
+      if (gen !== previewGen) return;
+      const { pre, note } = makePreviewText(e, text);
       body.innerHTML = "";
       body.appendChild(pre);
+      if (note) body.appendChild(note);
       return;
     } catch {
       /* fall through to summary */
@@ -1330,6 +2847,432 @@ function setPreview(open: boolean): void {
   $("preview-toggle").setAttribute("aria-pressed", String(open));
   $("preview-toggle").classList.toggle("is-active", open);
   if (open) void updatePreview();
+}
+
+// Text preview shared by the preview pane and Quick Look: first 200 lines
+// with line numbers; code files get syntax highlighting.
+type ArchiveEntry = { name: string; size: number | null; is_dir: boolean };
+
+// Extensions whose contents can be listed without extracting.
+const ARCHIVE_EXTS = new Set(["zip", "tar", "tgz", "gz", "xz", "bz2"]);
+
+/** Archive listing for the preview pane and Quick Look: name + size rows. */
+function makeArchivePreview(e: Entry, entries: ArchiveEntry[]): HTMLElement {
+  const wrap = document.createElement("div");
+  const head = document.createElement("p");
+  head.className = "preview-caption";
+  head.textContent = `Archive · ${entries.length} ${entries.length === 1 ? "entry" : "entries"}`;
+  const list = document.createElement("div");
+  list.className = "archive-list";
+  for (const a of entries) {
+    const row = document.createElement("div");
+    row.className = "archive-row";
+    const name = document.createElement("span");
+    name.className = "mono archive-name";
+    name.textContent = a.name;
+    const size = document.createElement("span");
+    size.className = "archive-size";
+    size.textContent = a.is_dir || a.size === null ? "—" : fmtSize(a.size);
+    row.append(name, size);
+    list.appendChild(row);
+  }
+  wrap.append(head, list);
+  return wrap;
+}
+
+/** Small Markdown renderer for the preview pane. The file content is
+ * escaped first so it can never inject markup; links are http(s) only. */
+function renderMarkdown(text: string): string {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const codes: string[] = [];
+  const inline = (s: string): string => {
+    let out = esc(s).replace(/`([^`]+)`/g, (_m, c) => {
+      codes.push(c);
+      return `\u0000${codes.length - 1}\u0000`;
+    });
+    out = out
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    return out.replace(/\u0000(\d+)\u0000/g, (_m, i) => `<code>${codes[Number(i)]}</code>`);
+  };
+  const lines = text.split("\n");
+  const html: string[] = [];
+  let inCode = false;
+  let codeBuf: string[] = [];
+  let listBuf: string[] = [];
+  const flushList = () => {
+    if (listBuf.length) {
+      html.push(`<ul>${listBuf.map((l) => `<li>${inline(l)}</li>`).join("")}</ul>`);
+      listBuf = [];
+    }
+  };
+  for (const raw of lines) {
+    if (raw.trim().startsWith("```")) {
+      if (inCode) {
+        html.push(`<pre class="md-code">${esc(codeBuf.join("\n"))}</pre>`);
+        codeBuf = [];
+        inCode = false;
+      } else {
+        flushList();
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) {
+      codeBuf.push(raw);
+      continue;
+    }
+    const h = raw.match(/^(#{1,3})\s+(.*)$/);
+    if (h) {
+      flushList();
+      html.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`);
+      continue;
+    }
+    const q = raw.match(/^>\s?(.*)$/);
+    if (q) {
+      flushList();
+      html.push(`<blockquote>${inline(q[1])}</blockquote>`);
+      continue;
+    }
+    const li = raw.match(/^[-*]\s+(.*)$/);
+    if (li) {
+      listBuf.push(li[1]);
+      continue;
+    }
+    if (raw.trim() === "") {
+      flushList();
+      continue;
+    }
+    flushList();
+    html.push(`<p>${inline(raw)}</p>`);
+  }
+  if (inCode) html.push(`<pre class="md-code">${esc(codeBuf.join("\n"))}</pre>`);
+  flushList();
+  return html.join("\n");
+}
+
+function makePreviewText(e: Entry, text: string): { pre: HTMLPreElement; note: HTMLParagraphElement | null } {
+  const lines = text.split("\n");
+  const shown = lines.slice(0, 200);
+  const pre = document.createElement("pre");
+  pre.className = "preview-text";
+  const isCode = e.extension ? CODE_EXTS.has(e.extension) : false;
+  if (isCode) {
+    pre.innerHTML = shown
+      .map((l, i) => `<span class="line-num">${String(i + 1).padStart(4, " ")}</span>  ${highlightCodeLine(l, e.extension!)}`)
+      .join("\n");
+  } else {
+    pre.textContent = shown.map((l, i) => `${String(i + 1).padStart(4, " ")}  ${l}`).join("\n");
+  }
+  const note = lines.length > 200 ? document.createElement("p") : null;
+  if (note) {
+    note.className = "preview-caption";
+    note.textContent = `Showing first 200 of ${lines.length} lines`;
+  }
+  return { pre, note };
+}
+
+// PDF preview shared by the preview pane and Quick Look.
+function makePdfPreview(e: Entry): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  const embed = document.createElement("embed");
+  embed.className = "preview-pdf";
+  embed.src = convertFileSrc(e.path);
+  embed.type = "application/pdf";
+  frag.appendChild(embed);
+  const openBtn = document.createElement("button");
+  openBtn.type = "button";
+  openBtn.className = "btn btn-outline";
+  openBtn.textContent = "Open with default app";
+  openBtn.addEventListener("click", () => void invoke("open_path", { path: e.path }));
+  const cap = document.createElement("p");
+  cap.className = "preview-caption";
+  cap.textContent = fmtSize(e.size ?? 0);
+  const row = document.createElement("div");
+  row.className = "preview-pdf-row";
+  row.append(openBtn, cap);
+  frag.appendChild(row);
+  return frag;
+}
+
+/* ---- Quick Look (Space): a large centred preview of the selected file ---- */
+
+let quicklookOpen = false;
+let quicklookGen = 0;
+
+function openQuickLook(): void {
+  if (selectedEntries().length !== 1) return;
+  quicklookOpen = true;
+  $("quicklook").hidden = false;
+  void renderQuickLook();
+}
+
+function closeQuickLook(): void {
+  if (!quicklookOpen) return;
+  quicklookOpen = false;
+  const body = $("quicklook-body");
+  body.querySelectorAll("video").forEach((v) => v.pause());
+  body.innerHTML = "";
+  $("quicklook").hidden = true;
+}
+
+function moveQuickLook(delta: number): void {
+  const list = state.filtered;
+  const cur = selectedEntries()[0];
+  const idx = cur ? list.findIndex((x) => x.path === cur.path) : -1;
+  const next = list[Math.min(list.length - 1, Math.max(0, idx + delta))];
+  if (!next) return;
+  state.selection.clear();
+  state.selection.add(next.path);
+  state.anchor = next.path;
+  renderSelection();
+  void renderQuickLook();
+  scrollSelectedIntoView(next.path);
+}
+
+async function renderQuickLook(): Promise<void> {
+  const gen = ++quicklookGen;
+  const body = $("quicklook-body");
+  const cap = $("quicklook-caption");
+  const items = selectedEntries();
+  if (items.length !== 1) {
+    closeQuickLook();
+    return;
+  }
+  const e = items[0];
+  $("quicklook-title").textContent = e.name;
+  body.innerHTML = "";
+  cap.textContent = "";
+  if (e.is_dir) {
+    try {
+      const p = await invoke<Properties>("get_properties", { path: e.path });
+      if (gen !== quicklookGen) return;
+      body.innerHTML = `<dl class="detail-grid"><div><dt>Type</dt><dd>Folder</dd></div><div><dt>Size</dt><dd>${fmtSize(p.size)}</dd></div><div><dt>Items</dt><dd>${p.items ?? 0}</dd></div><div><dt>Modified</dt><dd>${fmtDate(p.modified)}</dd></div></dl>`;
+    } catch {
+      if (gen !== quicklookGen) return;
+      body.innerHTML = `<p class="preview-note">Folder</p>`;
+    }
+    return;
+  }
+  if (e.extension && IMAGE_EXTS.has(e.extension)) {
+    const img = document.createElement("img");
+    img.className = "quicklook-img";
+    img.src = convertFileSrc(e.path);
+    img.alt = `Preview of ${e.name}`;
+    img.onerror = () => {
+      body.innerHTML = `<p class="preview-note">Could not preview this image.</p>`;
+    };
+    img.onload = () => {
+      if (gen !== quicklookGen) return;
+      cap.textContent = `${img.naturalWidth} × ${img.naturalHeight} · ${fmtSize(e.size ?? 0)}`;
+    };
+    body.appendChild(img);
+    return;
+  }
+  if (e.extension && VIDEO_EXTS.has(e.extension)) {
+    // No inline player: a <video> element crashes this WebKitGTK (missing
+    // GStreamer autoaudiosink). Show the first frame instead, with a button
+    // to open the file's own player.
+    try {
+      const b64 = await invoke<string>("thumb", { path: e.path });
+      if (gen !== quicklookGen) return;
+      const img = document.createElement("img");
+      img.className = "quicklook-img";
+      img.src = `data:image/png;base64,${b64}`;
+      img.alt = `First frame of ${e.name}`;
+      body.appendChild(img);
+    } catch {
+      if (gen !== quicklookGen) return;
+      body.innerHTML = `<dl class="detail-grid"><div><dt>Type</dt><dd>${kindLabel(e)}</dd></div><div><dt>Size</dt><dd>${fmtSize(e.size ?? 0)}</dd></div><div><dt>Modified</dt><dd>${fmtDate(e.modified)}</dd></div></dl>`;
+    }
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.className = "btn btn-outline";
+    openBtn.textContent = "Open with default app";
+    openBtn.addEventListener("click", () => void invoke("open_path", { path: e.path }));
+    const row = document.createElement("div");
+    row.className = "preview-pdf-row";
+    row.appendChild(openBtn);
+    body.appendChild(row);
+    cap.textContent = fmtSize(e.size ?? 0);
+    return;
+  }
+  if (e.extension === "pdf") {
+    body.appendChild(makePdfPreview(e));
+    return;
+  }
+  if (e.extension && ARCHIVE_EXTS.has(e.extension)) {
+    try {
+      const entries = await invoke<ArchiveEntry[]>("list_archive", { path: e.path });
+      if (gen !== quicklookGen) return;
+      body.appendChild(makeArchivePreview(e, entries));
+      return;
+    } catch {
+      /* fall through to summary */
+    }
+  }
+  if ((e.extension === "md" || e.extension === "markdown") && (e.size ?? 0) < 200_000) {
+    try {
+      const text = await invoke<string>("read_text", { path: e.path });
+      if (gen !== quicklookGen) return;
+      const div = document.createElement("div");
+      div.className = "md-preview";
+      div.innerHTML = renderMarkdown(text);
+      body.appendChild(div);
+      return;
+    } catch {
+      /* fall through to summary */
+    }
+  }
+  if (e.extension && TEXT_EXTS.has(e.extension) && (e.size ?? 0) < 200_000) {
+    try {
+      const text = await invoke<string>("read_text", { path: e.path });
+      if (gen !== quicklookGen) return;
+      const { pre, note } = makePreviewText(e, text);
+      body.appendChild(pre);
+      if (note) body.appendChild(note);
+      return;
+    } catch {
+      /* fall through to summary */
+    }
+  }
+  body.innerHTML = `<dl class="detail-grid"><div><dt>Type</dt><dd>${kindLabel(e)}</dd></div><div><dt>Size</dt><dd>${fmtSize(e.size ?? 0)}</dd></div><div><dt>Modified</dt><dd>${fmtDate(e.modified)}</dd></div></dl>`;
+}
+
+/* ---- Appearance (density, interface scale, grid zoom, grouping) ---- */
+
+type Density = "comfortable" | "compact";
+
+function applyDensity(): void {
+  const d = (localStorage.getItem("filemon-density") || "comfortable") as Density;
+  document.body.classList.toggle("density-compact", d === "compact");
+}
+
+function applyUiScale(): void {
+  const s = Number(localStorage.getItem("filemon-ui-scale") || "1") || 1;
+  ($("app") as HTMLElement).style.zoom = String(s);
+}
+
+function setDensity(d: Density): void {
+  localStorage.setItem("filemon-density", d);
+  applyDensity();
+  syncAppearancePanel();
+}
+
+function setUiScale(s: number): void {
+  localStorage.setItem("filemon-ui-scale", String(s));
+  applyUiScale();
+  syncAppearancePanel();
+}
+
+function setGridZoom(z: 0 | 1 | 2): void {
+  state.zoom = z;
+  saveTabs();
+  render();
+  syncAppearancePanel();
+}
+
+function setGroupBy(g: GroupMode): void {
+  state.groupBy = g;
+  state.pane.collapsedGroups.clear();
+  saveTabs();
+  render();
+  syncAppearancePanel();
+}
+
+function syncAppearancePanel(): void {
+  ($("appearance-group") as HTMLSelectElement).value = state.groupBy;
+  document.querySelectorAll("#appearance-panel [data-density]").forEach((b) => {
+    b.classList.toggle(
+      "is-active",
+      (b as HTMLElement).dataset.density === (localStorage.getItem("filemon-density") || "comfortable"),
+    );
+  });
+  document.querySelectorAll("#appearance-panel [data-scale]").forEach((b) => {
+    b.classList.toggle(
+      "is-active",
+      (b as HTMLElement).dataset.scale === (localStorage.getItem("filemon-ui-scale") || "1"),
+    );
+  });
+  document.querySelectorAll("#appearance-panel [data-zoom]").forEach((b) => {
+    b.classList.toggle("is-active", Number((b as HTMLElement).dataset.zoom) === state.zoom);
+  });
+}
+
+function toggleAppearancePanel(open?: boolean): void {
+  const panel = $("appearance-panel");
+  const willOpen = open ?? panel.hidden;
+  if (willOpen) {
+    syncAppearancePanel();
+    const rect = $("act-appearance").getBoundingClientRect();
+    panel.style.top = `${rect.bottom + 6}px`;
+    panel.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+    panel.hidden = false;
+    $("act-appearance").setAttribute("aria-pressed", "true");
+  } else {
+    panel.hidden = true;
+    $("act-appearance").setAttribute("aria-pressed", "false");
+  }
+}
+
+/* ---- Advanced filters (toolbar Filter button) ---- */
+// Reads the filter panel into the active pane's filter, then re-renders.
+// Size inputs are KB; dates are yyyy-mm-dd from the date inputs.
+
+function syncFilterPanel(): void {
+  const f = state.pane.filter;
+  ($("filter-kind") as HTMLSelectElement).value = f.kind;
+  ($("filter-ext") as HTMLInputElement).value = f.ext;
+  ($("filter-min") as HTMLInputElement).value = f.minSize === null ? "" : String(Math.round(f.minSize / 1024));
+  ($("filter-max") as HTMLInputElement).value = f.maxSize === null ? "" : String(Math.round(f.maxSize / 1024));
+  ($("filter-after") as HTMLInputElement).value = f.after ?? "";
+  ($("filter-before") as HTMLInputElement).value = f.before ?? "";
+  ($("act-filter") as HTMLButtonElement).classList.toggle("is-active", filterActive());
+  ($("act-filter") as HTMLButtonElement).setAttribute("aria-pressed", String(filterActive()));
+}
+
+function applyFilterFromPanel(): void {
+  const kb = (id: string): number | null => {
+    const v = Number(($(`filter-${id}`) as HTMLInputElement).value);
+    return Number.isFinite(v) && v >= 0 && ($(`filter-${id}`) as HTMLInputElement).value !== "" ? Math.round(v * 1024) : null;
+  };
+  state.pane.filter = {
+    kind: ($("filter-kind") as HTMLSelectElement).value,
+    ext: ($("filter-ext") as HTMLInputElement).value.trim().replace(/^\./, ""),
+    minSize: kb("min"),
+    maxSize: kb("max"),
+    after: ($("filter-after") as HTMLInputElement).value || null,
+    before: ($("filter-before") as HTMLInputElement).value || null,
+  };
+  ($("act-filter") as HTMLButtonElement).classList.toggle("is-active", filterActive());
+  ($("act-filter") as HTMLButtonElement).setAttribute("aria-pressed", String(filterActive()));
+  render();
+  showState(state.filtered.length === 0 ? "empty" : "full");
+}
+
+function toggleFilterPanel(open?: boolean): void {
+  const panel = $("filter-panel");
+  const willOpen = open ?? panel.hidden;
+  if (willOpen) {
+    toggleAppearancePanel(false);
+    syncFilterPanel();
+    const rect = $("act-filter").getBoundingClientRect();
+    panel.style.top = `${rect.bottom + 6}px`;
+    panel.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+    panel.hidden = false;
+    $("act-filter").setAttribute("aria-pressed", "true");
+  } else {
+    panel.hidden = true;
+    if (!filterActive()) $("act-filter").setAttribute("aria-pressed", "false");
+  }
+}
+
+function clearFilters(): void {
+  state.pane.filter = { kind: "all", ext: "", minSize: null, maxSize: null, after: null, before: null };
+  syncFilterPanel();
+  render();
+  showState(state.filtered.length === 0 ? "empty" : "full");
 }
 
 function showMenuAt(
@@ -1373,12 +3316,14 @@ function showContextMenu(x: number, y: number, target: Entry | null): void {
     }
   } else if (target) {
     items.push({ label: "Open", action: () => void openEntry(target) });
+    items.push({ label: "Quick Look", action: openQuickLook });
     if (target.is_dir) items.push({ label: "Open in new tab", action: () => void openInNewTab(target.path) });
     items.push({
       label: "Open in Terminal",
       action: () =>
         void doOpenTerminal(target.is_dir ? target.path : (parentOf(target.path) ?? state.path)),
     });
+    if (!target.is_dir) items.push({ label: "Open With…", action: () => void askOpenWith(target) });
     if (target.is_dir && !isBuiltinPlace(target.path)) {
       items.push({
         label: isPinned(target.path) ? "Unpin from Quick access" : "Pin to Quick access",
@@ -1387,15 +3332,23 @@ function showContextMenu(x: number, y: number, target: Entry | null): void {
     }
     items.push({ label: "Copy", action: () => void doCopyCut("copy") });
     items.push({ label: "Cut", action: () => void doCopyCut("cut") });
+    items.push({ label: "Copy Path", action: () => void doCopyPath() });
+    if (state.dual) {
+      items.push({ label: "Copy to other pane (F5)", action: () => void transferToOtherPane(true) });
+      items.push({ label: "Move to other pane (F6)", action: () => void transferToOtherPane(false) });
+      items.push({ label: "Compare with other pane", action: () => void runCompare() });
+    }
     items.push({ label: "Compress to ZIP", action: () => void doCompress() });
     if (state.selection.size === 1 && (target.extension ?? "").toLowerCase() === "zip") {
       items.push({ label: "Extract here", action: () => void doExtract() });
     }
     items.push({ label: "Rename", disabled: state.selection.size !== 1, action: askRename });
+    items.push({ label: "Batch rename…", action: askBatchRename });
     items.push({ label: "Delete", action: askDelete });
     items.push({ label: "Properties", disabled: state.selection.size !== 1, action: () => void showProperties() });
   } else {
     items.push({ label: "Open in Terminal", action: () => void doOpenTerminal(state.path) });
+    items.push({ label: "Copy Path", action: () => void doCopyPath() });
     if (!isBuiltinPlace(state.path)) {
       items.push({
         label: isPinned(state.path) ? "Unpin this folder from Quick access" : "Pin this folder to Quick access",
@@ -1435,13 +3388,19 @@ async function runSearch(): Promise<void> {
   state.searchQuery = q;
   showState("loading");
   try {
+    if (state.contentMode) {
+      const matches = await invoke<ContentMatch[]>("search_content", { root: state.path, query: q });
+      state.entries = matches.map((m) => m.entry);
+      state.contentMatches = new Map(matches.map((m) => [m.entry.path, { line: m.line, snippet: m.snippet }]));
+      render();
+      showState(state.filtered.length === 0 ? "empty" : "full");
+      renderStatus();
+      return;
+    }
+    state.contentMatches = null;
     state.entries = await invoke<Entry[]>("search_files", { root: state.path, query: q });
     render();
     showState(state.filtered.length === 0 ? "empty" : "full");
-    if (state.filtered.length === 0) {
-      ($("empty") as HTMLElement).querySelector("h2")!.textContent = "No results";
-      ($("empty") as HTMLElement).querySelector("p")!.textContent = `Nothing under this folder matches “${q}”.`;
-    }
     renderStatus();
   } catch (err) {
     toast(`Search failed: ${err}`, true);
@@ -1487,9 +3446,10 @@ function renderSidebar(): void {
   for (const d of state.drives) {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "nav-item";
-    b.innerHTML = `${iconSvg(ICONS.archive)}<span>${escapeHtml(d.name)}</span><span class="nav-meta">${fmtSize(d.free)} free</span>`;
-    b.title = `${d.mount} · ${d.fs} · ${fmtSize(d.free)} free of ${fmtSize(d.total)}`;
+    b.className = "nav-item nav-drive";
+    const used = d.total > 0 ? Math.round(((d.total - d.free) / d.total) * 100) : 0;
+    b.innerHTML = `<span class="nav-drive-row">${iconSvg(ICONS.drive)}<span>${escapeHtml(d.name)}</span><span class="nav-meta">${fmtSize(d.free)} free</span></span><span class="drive-bar" title="${used}% used"><span style="width: ${used}%" class="${used >= 90 ? "is-full" : ""}"></span></span>`;
+    b.title = `${d.mount} · ${d.fs} · ${fmtSize(d.free)} free of ${fmtSize(d.total)} (${used}% used)`;
     b.addEventListener("click", () => void navigate(d.mount));
     attachDropTarget(b, () => d.mount);
     dl.appendChild(b);
@@ -1529,11 +3489,32 @@ async function init(): Promise<void> {
   }
   const home = await invoke<string>("get_home");
   state.homeDir = home;
+  // Appearance preferences apply before the first render so the window
+  // never flashes the default density/scale.
+  applyDensity();
+  applyUiScale();
   loadPins();
   await prunePins();
   state.drives = await invoke<Drive[]>("get_drives");
   renderSidebar();
   restoreTabs(home);
+  if (state.dual) {
+    // Rebuild the second pane from the stored preference.
+    state.panes.push(makePane());
+    restoreTabs(home, 1);
+    buildSecondPane();
+    ($("pane-1") as HTMLElement).hidden = false;
+    document.querySelectorAll(".pane-head").forEach((el) => ((el as HTMLElement).hidden = false));
+    const dualBtn = $("act-dual") as HTMLButtonElement;
+    dualBtn.classList.add("is-active");
+    dualBtn.setAttribute("aria-pressed", "true");
+  }
+  // Session restore: the active pane comes back too, not just its tabs.
+  const savedPane = Number(localStorage.getItem("filemon-active-pane") ?? "0");
+  if (state.dual && savedPane === 1) {
+    state.activePane = 1;
+    document.querySelectorAll(".pane").forEach((el, idx) => el.classList.toggle("is-active", idx === 1));
+  }
 
   ($("sort-key") as HTMLSelectElement).value = state.sortKey;
   ($("show-hidden") as HTMLInputElement).checked = state.showHidden;
@@ -1597,6 +3578,90 @@ async function init(): Promise<void> {
   $("act-restore").addEventListener("click", () => void doRestore());
   $("act-delete-permanent").addEventListener("click", askDelete);
   $("act-empty-trash").addEventListener("click", askEmptyTrash);
+  $("act-dupes").addEventListener("click", () => void runDupes());
+  $("act-dual").addEventListener("click", () => void setDual(!state.dual));
+  $("act-appearance").addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    toggleFilterPanel(false);
+    toggleAppearancePanel();
+  });
+  $("act-filter").addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    toggleFilterPanel();
+  });
+  for (const id of ["filter-kind", "filter-ext", "filter-min", "filter-max", "filter-after", "filter-before"]) {
+    $(id).addEventListener("input", () => applyFilterFromPanel());
+    $(id).addEventListener("change", () => applyFilterFromPanel());
+  }
+  $("filter-clear").addEventListener("click", () => clearFilters());
+  // Clicking anywhere outside the filter panel closes it (the button stops
+  // its own click from reaching here).
+  document.addEventListener("click", (ev) => {
+    if (!($("filter-panel") as HTMLElement).hidden && !(ev.target as HTMLElement).closest("#filter-panel")) {
+      toggleFilterPanel(false);
+    }
+  });
+  const addressBar = $("address-bar") as HTMLInputElement;
+  addressBar.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      void goToAddress();
+    } else if (ev.key === "Escape") {
+      ev.preventDefault();
+      hideAddressBar();
+    }
+  });
+  addressBar.addEventListener("blur", () => hideAddressBar());
+  ($("appearance-group") as HTMLSelectElement).addEventListener("change", (ev) => {
+    setGroupBy((ev.target as HTMLSelectElement).value as GroupMode);
+  });
+  document.querySelectorAll("#appearance-panel [data-density]").forEach((b) => {
+    b.addEventListener("click", () => setDensity((b as HTMLElement).dataset.density as Density));
+  });
+  document.querySelectorAll("#appearance-panel [data-scale]").forEach((b) => {
+    b.addEventListener("click", () => setUiScale(Number((b as HTMLElement).dataset.scale)));
+  });
+  document.querySelectorAll("#appearance-panel [data-zoom]").forEach((b) => {
+    b.addEventListener("click", () => setGridZoom(Number((b as HTMLElement).dataset.zoom) as 0 | 1 | 2));
+  });
+  // Clicking anywhere outside the panel closes it (the button stops its
+  // own click from reaching here).
+  document.addEventListener("click", (ev) => {
+    if (!($("appearance-panel") as HTMLElement).hidden && !(ev.target as HTMLElement).closest("#appearance-panel")) {
+      toggleAppearancePanel(false);
+    }
+  });
+  // Ctrl+wheel on either grid zooms the tiles (delegated: pane 1's grid
+  // is built later, and the wheel target is a tile, not the wrap).
+  ($("panes") as HTMLElement).addEventListener(
+    "wheel",
+    (ev) => {
+      if (!(ev.ctrlKey || ev.metaKey)) return;
+      if (!(ev.target as HTMLElement).closest(".grid-wrap")) return;
+      if (state.view !== "icons") return;
+      ev.preventDefault();
+      setGridZoom(Math.min(2, Math.max(0, state.zoom + (ev.deltaY < 0 ? 1 : -1))) as 0 | 1 | 2);
+    },
+    { passive: false },
+  );
+  $("quicklook-close").addEventListener("click", closeQuickLook);
+  $("quicklook-backdrop").addEventListener("click", closeQuickLook);
+  $("quicklook-prev").addEventListener("click", () => moveQuickLook(-1));
+  $("quicklook-next").addEventListener("click", () => moveQuickLook(1));
+  $("empty-clear-search").addEventListener("click", clearSearch);
+  $("pane-0").addEventListener("mousedown", () => setActivePane(0));
+  $("dupe-delete").addEventListener("click", () => void deleteSelectedDupes());
+  $("dupe-done").addEventListener("click", () => void exitDupes());
+  $("compare-copy-out").addEventListener("click", () => void copyMissing(true));
+  $("compare-copy-in").addEventListener("click", () => void copyMissing(false));
+  $("compare-done").addEventListener("click", () => void exitCompare());
+  $("search-content").addEventListener("click", () => {
+    state.contentMode = !state.contentMode;
+    const btn = $("search-content");
+    btn.setAttribute("aria-pressed", String(state.contentMode));
+    btn.classList.toggle("is-active", state.contentMode);
+    if (state.searching) void runSearch();
+  });
 
   ($("show-hidden") as HTMLInputElement).addEventListener("change", (ev) => {
     state.showHidden = (ev.target as HTMLInputElement).checked;
@@ -1706,17 +3771,28 @@ async function init(): Promise<void> {
     $("transfer-bytes").textContent = `${fmtSize(p.done_bytes)} of ${fmtSize(p.total_bytes)}`;
   });
   // A folder's size arrives after the listing: fill in its Size cell in
-  // place instead of re-rendering the whole list.
+  // place instead of re-rendering the whole list. When sorting by size the
+  // order itself depends on that number, so re-sort (debounced — sizes
+  // arrive one per folder) instead of leaving the list mis-ordered.
+  let sizeSortTimer = 0;
   void listen<{ path: string; size: number }>("folder-size", (ev) => {
     folderSizeCache.set(ev.payload.path, ev.payload.size);
-    for (const tr of document.querySelectorAll("#file-body tr")) {
-      if ((tr as HTMLTableRowElement).dataset.path === ev.payload.path) {
-        const cell = tr.querySelector("td.num");
-        if (cell) cell.textContent = fmtSize(ev.payload.size);
-        break;
+    for (const suf of ["", "-1"]) {
+      for (const tr of document.querySelectorAll(`#file-body${suf} tr`)) {
+        if ((tr as HTMLTableRowElement).dataset.path === ev.payload.path) {
+          const cell = tr.querySelector("td.num");
+          if (cell) cell.textContent = fmtSize(ev.payload.size);
+          break;
+        }
       }
     }
     if (state.selection.has(ev.payload.path)) renderSelection();
+    // Either pane may be sorting by size: re-sort both when one does.
+    const anySizeSort = state.panes.some((p) => p.tabs[p.activeTab]?.sortKey === "size");
+    if (anySizeSort) {
+      window.clearTimeout(sizeSortTimer);
+      sizeSortTimer = window.setTimeout(() => render(), 150);
+    }
   });
   $("transfer-cancel").addEventListener("click", () => {
     ($("transfer-cancel") as HTMLButtonElement).disabled = true;
@@ -1730,16 +3806,63 @@ async function init(): Promise<void> {
   });
   document.addEventListener("keydown", (ev) => {
     const inField = (ev.target as HTMLElement).closest("input, select, textarea, dialog");
-    if (ev.key === "Escape") hideContextMenu();
+    if (ev.key === "Escape") {
+      hideContextMenu();
+      toggleAppearancePanel(false);
+      toggleFilterPanel(false);
+      hideAddressBar();
+    }
+    // While Quick Look is open it owns the keyboard: Esc/Space close it,
+    // Left/Right step through the listing, everything else is swallowed.
+    if (quicklookOpen) {
+      ev.preventDefault();
+      if (ev.key === "Escape" || ev.key === " ") closeQuickLook();
+      else if (ev.key === "ArrowRight") moveQuickLook(1);
+      else if (ev.key === "ArrowLeft") moveQuickLook(-1);
+      return;
+    }
+    // Ctrl+Shift+T reopens the last closed tab; plain Ctrl+T opens a fresh one.
+    if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === "t") {
+      ev.preventDefault();
+      void reopenClosedTab();
+      return;
+    }
     // Tab shortcuts work even from the search box.
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "t") {
       ev.preventDefault();
       newTab();
       return;
     }
+    // Ctrl+L focuses the address bar (works from a field too).
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "l") {
+      ev.preventDefault();
+      showAddressBar();
+      return;
+    }
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "w") {
       ev.preventDefault();
       void closeTab(state.activeTab);
+      return;
+    }
+    // Ctrl+H toggles hidden files (the checkbox in the toolbar does the same).
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "h") {
+      ev.preventDefault();
+      state.showHidden = !state.showHidden;
+      ($("show-hidden") as HTMLInputElement).checked = state.showHidden;
+      localStorage.setItem("filemon-hidden", state.showHidden ? "1" : "0");
+      render();
+      showState(state.filtered.length === 0 ? "empty" : "full");
+      return;
+    }
+    // Ctrl+Shift+D toggles dual pane; Alt+1 / Alt+2 switch the active pane.
+    if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === "d") {
+      ev.preventDefault();
+      void setDual(!state.dual);
+      return;
+    }
+    if (ev.altKey && (ev.key === "1" || ev.key === "2")) {
+      ev.preventDefault();
+      if (state.dual) setActivePane(Number(ev.key) - 1);
       return;
     }
     if (ev.ctrlKey && ev.key === "Tab") {
@@ -1752,6 +3875,13 @@ async function init(): Promise<void> {
       void switchTab(
         (state.activeTab + (ev.key === "PageUp" ? state.tabs.length - 1 : 1)) % state.tabs.length,
       );
+      return;
+    }
+    // Space opens Quick Look on the single selected file (not from a field,
+    // where it types a space).
+    if (ev.key === " " && !inField && state.selection.size === 1) {
+      ev.preventDefault();
+      openQuickLook();
       return;
     }
     if (inField) return;
@@ -1778,28 +3908,40 @@ async function init(): Promise<void> {
     } else if (ev.key === "F2") {
       ev.preventDefault();
       askRename();
+    } else if ((ev.ctrlKey || ev.metaKey) && (ev.key === "=" || ev.key === "+") && state.view === "icons") {
+      ev.preventDefault();
+      setGridZoom(Math.min(2, state.zoom + 1) as 0 | 1 | 2);
+    } else if ((ev.ctrlKey || ev.metaKey) && ev.key === "-" && state.view === "icons") {
+      ev.preventDefault();
+      setGridZoom(Math.max(0, state.zoom - 1) as 0 | 1 | 2);
     } else if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
       ev.preventDefault();
       const step = state.view === "icons" ? gridColumns() : 1;
-      moveSelection(ev.key === "ArrowDown" ? step : -step);
+      moveSelection(ev.key === "ArrowDown" ? step : -step, ev.shiftKey);
     } else if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
       ev.preventDefault();
-      if (state.view === "icons") moveSelection(ev.key === "ArrowRight" ? 1 : -1);
+      if (state.view === "icons") moveSelection(ev.key === "ArrowRight" ? 1 : -1, ev.shiftKey);
     } else if (ev.key === "Home") {
       ev.preventDefault();
-      moveSelectionTo(0);
+      moveSelectionTo(0, ev.shiftKey);
     } else if (ev.key === "End") {
       ev.preventDefault();
-      moveSelectionTo(state.filtered.length - 1);
+      moveSelectionTo(state.filtered.length - 1, ev.shiftKey);
     } else if (ev.key === "PageDown" || ev.key === "PageUp") {
       ev.preventDefault();
-      moveSelection(ev.key === "PageDown" ? pageStep() : -pageStep());
+      moveSelection(ev.key === "PageDown" ? pageStep() : -pageStep(), ev.shiftKey);
     } else if (ev.key === "Enter" && state.selection.size === 1) {
       const e = selectedEntries()[0];
       if (e) void openEntry(e);
     } else if (ev.key === "Backspace") {
       const p = parentOf(state.path);
       if (p !== null) void navigate(p);
+    } else if (ev.key === "F5" && state.dual) {
+      ev.preventDefault();
+      void transferToOtherPane(true);
+    } else if (ev.key === "F6" && state.dual) {
+      ev.preventDefault();
+      void transferToOtherPane(false);
     }
   });
 
@@ -1807,6 +3949,14 @@ async function init(): Promise<void> {
     ev.preventDefault();
     void doRename();
   });
+  ($("batch-confirm") as HTMLButtonElement).addEventListener("click", (ev) => {
+    ev.preventDefault();
+    void doBatchRename();
+  });
+  for (const id of ["batch-find", "batch-replace", "batch-prefix", "batch-suffix", "batch-number", "batch-num-start", "batch-num-pad"]) {
+    $(id).addEventListener("input", () => updateBatchPreview());
+    $(id).addEventListener("change", () => updateBatchPreview());
+  }
   ($("new-confirm") as HTMLButtonElement).addEventListener("click", (ev) => {
     ev.preventDefault();
     void doNew();
@@ -1817,7 +3967,7 @@ async function init(): Promise<void> {
     else if (deleteMode === "empty") void doEmptyTrash();
     else void doDelete();
   });
-  for (const id of ["dlg-rename", "dlg-new", "dlg-delete"]) {
+  for (const id of ["dlg-rename", "dlg-new", "dlg-delete", "dlg-batch", "dlg-open-with"]) {
     ($(id) as HTMLDialogElement).addEventListener("click", (ev) => {
       if (ev.target === $(id)) ($(id) as HTMLDialogElement).close();
     });
@@ -1839,6 +3989,7 @@ async function init(): Promise<void> {
       updateNavButtons();
     }
   }
+  if (state.dual) await loadDirFor(1);
 }
 
 void init();

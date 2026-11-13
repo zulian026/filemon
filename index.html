@@ -73,9 +73,11 @@
             <button id="btn-up" class="icon-btn" type="button" title="Up one folder (Alt+Up)" aria-label="Up one folder"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M3 8l5-5 5 5"/></svg></button>
           </div>
           <nav id="crumbs" class="crumbs" aria-label="Current folder"></nav>
+          <input id="address-bar" class="address-bar mono" type="text" hidden aria-label="Go to folder (Ctrl+L)" autocomplete="off" spellcheck="false" />
           <div class="topbar-search search-field">
             <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.6 10.6L14 14"/></svg>
             <input id="search" type="search" placeholder="Search this folder, Enter searches everywhere below" aria-label="Search" autocomplete="off" />
+            <button id="search-content" class="icon-btn search-mode-btn" type="button" aria-pressed="false" title="Search file contents (Enter searches content)" aria-label="Search file contents"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 3h11M8 3v10M5.5 13h5"/></svg></button>
           </div>
           <button id="preview-toggle" class="icon-btn" type="button" aria-pressed="false" title="Toggle preview" aria-label="Toggle preview"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M10.5 2.5v11"/></svg></button>
           <button id="theme-toggle" class="icon-btn" type="button" title="Switch to light mode" aria-label="Switch to light mode"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/></svg></button>
@@ -95,6 +97,10 @@
           <button id="act-delete-permanent" class="icon-btn btn-danger" type="button" disabled hidden title="Delete permanently" aria-label="Delete permanently"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4h11M6.5 4V2.8h3V4M4 4l.8 10h6.4L12 4M6.5 7v4M9.5 7v4"/></svg></button>
           <button id="act-empty-trash" class="btn btn-danger" type="button" hidden title="Delete everything in the Trash permanently" aria-label="Empty Trash">Empty Trash</button>
           <button id="act-props" class="icon-btn" type="button" disabled title="Properties" aria-label="Properties"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.5V11M8 4.8v.3"/></svg></button>
+          <button id="act-dupes" class="icon-btn" type="button" title="Find duplicate files in this folder" aria-label="Find duplicate files"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="8" height="8" rx="1"/><rect x="6" y="2" width="8" height="8" rx="1" fill="var(--color-paper)" /></svg></button>
+          <button id="act-dual" class="icon-btn" type="button" aria-pressed="false" title="Dual pane (Ctrl+Shift+D)" aria-label="Toggle dual pane"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="5" height="10" rx="1"/><rect x="9" y="3" width="5" height="10" rx="1"/></svg></button>
+          <button id="act-appearance" class="icon-btn" type="button" aria-pressed="false" title="Appearance: grouping, density, scale, grid size" aria-label="Appearance settings"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/><circle cx="5.5" cy="4.5" r="1.6" fill="var(--color-paper-2)"/><circle cx="10.5" cy="8" r="1.6" fill="var(--color-paper-2)"/><circle cx="7" cy="11.5" r="1.6" fill="var(--color-paper-2)"/></svg></button>
+          <button id="act-filter" class="icon-btn" type="button" aria-pressed="false" title="Filter by type, size, or date" aria-label="Filter files"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 3h11l-4.5 5.5v4l-2 1.5v-5.5z"/></svg></button>
           <span class="toolbar-spacer"></span>
           <label class="check-label"><input id="show-hidden" type="checkbox" /> Hidden files</label>
           <label class="sort-label" for="sort-key">Sort</label>
@@ -111,15 +117,35 @@
         </div>
 
         <main id="canvas">
-          <div id="file-area">
+          <div id="panes">
+          <div class="pane is-active" id="pane-0">
+          <div id="file-area" class="file-area">
+            <div id="pane-head" class="pane-head mono" hidden>—</div>
+            <div id="dupe-bar" class="dupe-bar" hidden>
+              <span id="dupe-summary">—</span>
+              <span class="toolbar-spacer"></span>
+              <button id="dupe-delete" class="btn btn-danger" type="button">Delete selected</button>
+              <button id="dupe-done" class="btn btn-outline" type="button">Done</button>
+            </div>
+            <div id="compare-bar" class="dupe-bar" hidden>
+              <span id="compare-summary">—</span>
+              <span class="toolbar-spacer"></span>
+              <button id="compare-copy-out" class="btn btn-outline" type="button">Copy missing → other pane</button>
+              <button id="compare-copy-in" class="btn btn-outline" type="button">Copy missing → this pane</button>
+              <button id="compare-done" class="btn btn-outline" type="button">Done</button>
+            </div>
             <div id="loading" class="state-block" hidden>
               <div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div><div class="skeleton-row"></div>
               <p class="status-line">Loading folder…</p>
             </div>
             <div id="empty" class="state-block" hidden>
+              <div class="empty-icon" aria-hidden="true"><svg width="48" height="48" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 2h6.5A1.5 1.5 0 0 1 16 6.5v6A1.5 1.5 0 0 1 14.5 14h-11A1.5 1.5 0 0 1 2 12.5v-8z"/></svg></div>
               <h2>This folder is empty</h2>
               <p>Nothing here yet. Create a folder or paste files into it.</p>
-              <button id="empty-new-folder" class="btn btn-primary" type="button">New folder</button>
+              <div class="empty-actions">
+                <button id="empty-new-folder" class="btn btn-primary" type="button">New folder</button>
+                <button id="empty-clear-search" class="btn btn-outline" type="button" hidden>Clear search</button>
+              </div>
             </div>
             <div id="error" class="state-block" hidden>
               <h2>Could not open this folder</h2>
@@ -141,6 +167,8 @@
             </div>
             <div id="grid-wrap" class="grid-wrap" hidden></div>
           </div>
+          </div>
+          </div>
           <aside id="preview" hidden aria-label="Preview">
             <div class="panel-head"><h2 id="preview-title">Preview</h2><button id="preview-close" class="icon-btn" type="button" aria-label="Close preview"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button></div>
             <div id="preview-body"></div>
@@ -157,6 +185,89 @@
     </div>
 
     <div id="ctx-menu" class="ctx-menu" role="menu" hidden></div>
+
+    <div id="appearance-panel" class="appearance-panel" hidden>
+      <label class="field-label" for="appearance-group">Group by</label>
+      <select id="appearance-group" aria-label="Group by">
+        <option value="none" selected>None</option>
+        <option value="type">Type</option>
+        <option value="date">Date modified</option>
+        <option value="size">Size</option>
+      </select>
+      <p class="field-label">Density</p>
+      <div class="segmented" role="group" aria-label="Density">
+        <button class="seg-btn" type="button" data-density="comfortable">Comfortable</button>
+        <button class="seg-btn" type="button" data-density="compact">Compact</button>
+      </div>
+      <p class="field-label">Interface scale</p>
+      <div class="segmented" role="group" aria-label="Interface scale">
+        <button class="seg-btn" type="button" data-scale="0.9">90%</button>
+        <button class="seg-btn" type="button" data-scale="1">100%</button>
+        <button class="seg-btn" type="button" data-scale="1.1">110%</button>
+        <button class="seg-btn" type="button" data-scale="1.25">125%</button>
+      </div>
+      <p class="field-label">Grid size</p>
+      <div class="segmented" role="group" aria-label="Grid size">
+        <button class="seg-btn" type="button" data-zoom="0">Small</button>
+        <button class="seg-btn" type="button" data-zoom="1">Medium</button>
+        <button class="seg-btn" type="button" data-zoom="2">Large</button>
+      </div>
+    </div>
+
+    <div id="filter-panel" class="appearance-panel" hidden>
+      <label class="field-label" for="filter-kind">Type</label>
+      <select id="filter-kind" aria-label="Filter by type">
+        <option value="all" selected>All types</option>
+        <option value="folders">Folders</option>
+        <option value="images">Images</option>
+        <option value="videos">Videos</option>
+        <option value="audio">Audio</option>
+        <option value="documents">Documents</option>
+        <option value="archives">Archives</option>
+        <option value="code">Code</option>
+        <option value="other">Other files</option>
+      </select>
+      <label class="field-label" for="filter-ext">Extension</label>
+      <input id="filter-ext" type="text" placeholder="e.g. png" autocomplete="off" />
+      <div class="filter-row">
+        <div>
+          <label class="field-label" for="filter-min">Min size (KB)</label>
+          <input id="filter-min" type="number" min="0" />
+        </div>
+        <div>
+          <label class="field-label" for="filter-max">Max size (KB)</label>
+          <input id="filter-max" type="number" min="0" />
+        </div>
+      </div>
+      <div class="filter-row">
+        <div>
+          <label class="field-label" for="filter-after">Modified after</label>
+          <input id="filter-after" type="date" />
+        </div>
+        <div>
+          <label class="field-label" for="filter-before">Modified before</label>
+          <input id="filter-before" type="date" />
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button id="filter-clear" class="btn btn-outline" type="button">Clear filters</button>
+      </div>
+    </div>
+
+    <div id="quicklook" class="quicklook" hidden>
+      <div id="quicklook-backdrop" class="quicklook-backdrop"></div>
+      <div class="quicklook-box" role="dialog" aria-label="Quick Look">
+        <div class="quicklook-head">
+          <span id="quicklook-title" class="mono">—</span>
+          <span class="toolbar-spacer"></span>
+          <button id="quicklook-prev" class="icon-btn" type="button" title="Previous file (Left arrow)" aria-label="Previous file"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg></button>
+          <button id="quicklook-next" class="icon-btn" type="button" title="Next file (Right arrow)" aria-label="Next file"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg></button>
+          <button id="quicklook-close" class="icon-btn" type="button" title="Close (Esc)" aria-label="Close Quick Look"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+        </div>
+        <div id="quicklook-body" class="quicklook-body"></div>
+        <p id="quicklook-caption" class="preview-caption"></p>
+      </div>
+    </div>
 
     <dialog id="dlg-rename" class="dialog">
       <form method="dialog">
@@ -191,6 +302,47 @@
         <div class="dialog-actions">
           <button class="btn btn-outline" value="cancel" type="submit">Cancel</button>
           <button id="delete-confirm" class="btn btn-danger" value="ok" type="submit">Move to Trash</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-open-with" class="dialog">
+      <form method="dialog">
+        <h2 id="open-with-title">Open With</h2>
+        <div id="open-with-list" class="app-list"></div>
+        <p id="open-with-empty" class="preview-note" hidden>No application handles this file type.</p>
+        <label class="check-label"><input id="open-with-always" type="checkbox" /> Always use the chosen app for this file type</label>
+        <div class="dialog-actions">
+          <button id="open-with-default" class="btn btn-outline" type="button" hidden>Open with default app</button>
+          <button class="btn btn-primary" value="cancel" type="submit">Cancel</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-batch" class="dialog">
+      <form method="dialog">
+        <h2>Batch rename</h2>
+        <p id="batch-count" class="preview-note"></p>
+        <label class="field-label" for="batch-find">Find</label>
+        <input id="batch-find" type="text" autocomplete="off" />
+        <label class="field-label" for="batch-replace">Replace with</label>
+        <input id="batch-replace" type="text" autocomplete="off" />
+        <label class="field-label" for="batch-prefix">Prefix</label>
+        <input id="batch-prefix" type="text" autocomplete="off" />
+        <label class="field-label" for="batch-suffix">Suffix (before the extension)</label>
+        <input id="batch-suffix" type="text" autocomplete="off" />
+        <label class="check-label batch-number"><input id="batch-number" type="checkbox" /> Add numbering (after the prefix)</label>
+        <div class="batch-num-row">
+          <label class="field-label" for="batch-num-start">Start at</label>
+          <input id="batch-num-start" type="number" value="1" min="0" />
+          <label class="field-label" for="batch-num-pad">Digits</label>
+          <input id="batch-num-pad" type="number" value="2" min="1" max="6" />
+        </div>
+        <div id="batch-preview" class="batch-preview"></div>
+        <p id="batch-error" class="field-error" hidden></p>
+        <div class="dialog-actions">
+          <button class="btn btn-outline" value="cancel" type="submit">Cancel</button>
+          <button id="batch-confirm" class="btn btn-primary" value="ok" type="submit">Rename</button>
         </div>
       </form>
     </dialog>

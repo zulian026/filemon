@@ -33,6 +33,36 @@ fn search_files(root: String, query: String) -> Vec<Entry> {
 }
 
 #[tauri::command]
+fn search_content(root: String, query: String) -> Vec<fsops::ContentMatch> {
+    fsops::search_content(&PathBuf::from(root), &query, 200)
+}
+
+#[tauri::command]
+fn compare_dirs(a: String, b: String, include_hidden: bool) -> Result<fsops::CompareResult, String> {
+    fsops::compare_dirs(&PathBuf::from(a), &PathBuf::from(b), include_hidden)
+}
+
+#[tauri::command]
+fn find_duplicates(root: String) -> Vec<fsops::DupeGroup> {
+    fsops::find_duplicates(&PathBuf::from(root))
+}
+
+#[tauri::command]
+fn set_default_app(path: String, desktop: String) -> Result<(), String> {
+    fsops::set_default_app(&PathBuf::from(path), &desktop)
+}
+
+#[tauri::command]
+fn list_apps_for(path: String) -> Vec<fsops::AppInfo> {
+    fsops::apps_for_path(&PathBuf::from(path))
+}
+
+#[tauri::command]
+fn open_with(path: String, exec: String) -> Result<(), String> {
+    fsops::open_with(&PathBuf::from(path), &exec)
+}
+
+#[tauri::command]
 fn copy_paths(paths: Vec<String>, dest: String) -> Result<usize, String> {
     let srcs: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
     fsops::copy_paths(&srcs, &PathBuf::from(dest))
@@ -72,7 +102,27 @@ fn get_properties(path: String) -> Result<Properties, String> {
 
 #[tauri::command]
 fn read_text(path: String) -> Result<String, String> {
-    fsops::read_text(&PathBuf::from(path), 8192)
+    fsops::read_text(&PathBuf::from(path), 65_536)
+}
+
+#[tauri::command]
+fn thumb(path: String) -> Result<String, String> {
+    fsops::thumb(&PathBuf::from(path))
+}
+
+#[tauri::command]
+fn list_archive(path: String) -> Result<Vec<fsops::ArchiveEntry>, String> {
+    fsops::list_archive(&PathBuf::from(path))
+}
+
+#[tauri::command]
+fn file_sha256(path: String) -> Result<String, String> {
+    fsops::file_sha256(&PathBuf::from(path))
+}
+
+#[tauri::command]
+fn set_permissions(path: String, mode: u32) -> Result<String, String> {
+    fsops::set_permissions(&PathBuf::from(path), mode)
 }
 
 #[tauri::command]
@@ -194,6 +244,12 @@ pub fn run() {
             list_dir,
             get_drives,
             search_files,
+            search_content,
+            compare_dirs,
+            find_duplicates,
+            list_apps_for,
+            set_default_app,
+            open_with,
             copy_paths,
             move_paths,
             start_transfer,
@@ -210,6 +266,10 @@ pub fn run() {
             new_file,
             get_properties,
             read_text,
+            thumb,
+            list_archive,
+            file_sha256,
+            set_permissions,
             open_path,
             open_terminal,
             path_exists,

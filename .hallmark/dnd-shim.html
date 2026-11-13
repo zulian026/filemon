@@ -10,14 +10,79 @@ window.__TAURI_INTERNALS__ = {
   invoke: async function (cmd, args) {
     window.__invokes.push([cmd, args || {}]);
     if (cmd === "get_home") return "/home/zyan";
-    if (cmd === "get_drives") return [];
-    if (cmd === "list_dir") return [
-      { name: "Docs", path: "/home/zyan/Docs", is_dir: true, is_symlink: false, size: null, modified: 1790000000, extension: null, hidden: false },
-      { name: "Pics", path: "/home/zyan/Pics", is_dir: true, is_symlink: false, size: null, modified: 1790000000, extension: null, hidden: false },
-      { name: "notes.txt", path: "/home/zyan/notes.txt", is_dir: false, is_symlink: false, size: 120, modified: 1790000000, extension: "txt", hidden: false },
-      { name: "img.png", path: "/home/zyan/img.png", is_dir: false, is_symlink: false, size: 6400, modified: 1790000000, extension: "png", hidden: false },
-      { name: "tree.zip", path: "/home/zyan/tree.zip", is_dir: false, is_symlink: false, size: 900, modified: 1790000000, extension: "zip", hidden: false }
+    if (cmd === "get_drives") return [
+      { name: "System disk", mount: "/", total: 100000000000, free: 40000000000, fs: "btrfs", removable: false },
+      { name: "/data", mount: "/data", total: 50000000000, free: 5000000000, fs: "ext4", removable: false }
     ];
+    if (cmd === "list_dir") {
+      // The appearance test sets window.__extendedList then reloads, to get
+      // one file of each type (icons, grouping, video thumbs, code preview).
+      if (window.__extendedList) return [
+        { name: "Docs", path: "/home/zyan/Docs", is_dir: true, is_symlink: false, size: null, modified: 1790000000, extension: null, hidden: false },
+        { name: "Pics", path: "/home/zyan/Pics", is_dir: true, is_symlink: false, size: null, modified: 1790000000, extension: null, hidden: false },
+        { name: "notes.txt", path: "/home/zyan/notes.txt", is_dir: false, is_symlink: false, size: 120, modified: 1790000000, extension: "txt", hidden: false },
+        { name: "guide.md", path: "/home/zyan/guide.md", is_dir: false, is_symlink: false, size: 300, modified: 1790000000, extension: "md", hidden: false },
+        { name: "img.png", path: "/home/zyan/img.png", is_dir: false, is_symlink: false, size: 6400, modified: 1790000000, extension: "png", hidden: false },
+        { name: "tree.zip", path: "/home/zyan/tree.zip", is_dir: false, is_symlink: false, size: 900, modified: 1790000000, extension: "zip", hidden: false },
+        { name: "video.mp4", path: "/home/zyan/video.mp4", is_dir: false, is_symlink: false, size: 9000, modified: 1790000000, extension: "mp4", hidden: false },
+        { name: "doc.pdf", path: "/home/zyan/doc.pdf", is_dir: false, is_symlink: false, size: 2000, modified: 1790000000, extension: "pdf", hidden: false },
+        { name: "code.rs", path: "/home/zyan/code.rs", is_dir: false, is_symlink: false, size: 300, modified: 1790000000, extension: "rs", hidden: false },
+        { name: "song.mp3", path: "/home/zyan/song.mp3", is_dir: false, is_symlink: false, size: 5000, modified: 1790000000, extension: "mp3", hidden: false },
+        { name: "sheet.xlsx", path: "/home/zyan/sheet.xlsx", is_dir: false, is_symlink: false, size: 1500, modified: 1790000000, extension: "xlsx", hidden: false },
+        { name: "slides.pptx", path: "/home/zyan/slides.pptx", is_dir: false, is_symlink: false, size: 2500, modified: 1790000000, extension: "pptx", hidden: false },
+        { name: "app.AppImage", path: "/home/zyan/app.AppImage", is_dir: false, is_symlink: false, size: 12000, modified: 1790000000, extension: "AppImage", hidden: false },
+        { name: "shortcut", path: "/home/zyan/shortcut", is_dir: false, is_symlink: true, size: 0, modified: 1790000000, extension: null, hidden: false },
+        { name: ".hiddenrc", path: "/home/zyan/.hiddenrc", is_dir: false, is_symlink: false, size: 10, modified: 1790000000, extension: null, hidden: true }
+      ];
+      return [
+        { name: "Docs", path: "/home/zyan/Docs", is_dir: true, is_symlink: false, size: null, modified: 1790000000, extension: null, hidden: false },
+        { name: "Pics", path: "/home/zyan/Pics", is_dir: true, is_symlink: false, size: null, modified: 1790000000, extension: null, hidden: false },
+        { name: "notes.txt", path: "/home/zyan/notes.txt", is_dir: false, is_symlink: false, size: 120, modified: 1790000000, extension: "txt", hidden: false },
+        { name: "img.png", path: "/home/zyan/img.png", is_dir: false, is_symlink: false, size: 6400, modified: 1790000000, extension: "png", hidden: false },
+        { name: "tree.zip", path: "/home/zyan/tree.zip", is_dir: false, is_symlink: false, size: 900, modified: 1790000000, extension: "zip", hidden: false },
+        { name: ".hiddenrc", path: "/home/zyan/.hiddenrc", is_dir: false, is_symlink: false, size: 10, modified: 1790000000, extension: null, hidden: true }
+      ];
+    }
+    if (cmd === "read_text") {
+      if (args && args.path && args.path.endsWith("code.rs")) return "fn main() {\n    // greet the world\n    let msg = \"hello\";\n    println!(\"{}\", msg);\n}\n";
+      if (args && args.path && args.path.endsWith("guide.md")) return "# Guide\n\nSome **bold** text and `code`.\n\n- item one\n- item two\n";
+      return "line one\nline two\nline three\n";
+    }
+    if (cmd === "get_properties") {
+      const p = (args && args.path) || "/home/zyan/notes.txt";
+      const isDir = p === "/home/zyan" || p.endsWith("/Docs") || p.endsWith("/Pics");
+      return { name: p.split("/").pop(), path: p, is_dir: isDir, size: isDir ? 12345 : 120, items: isDir ? 3 : null, modified: 1790000000, permissions: "644", kind: isDir ? "Folder" : "Text file" };
+    }
+    if (cmd === "compare_dirs") return {
+      only_a: [{ name: "notes.txt", path: "/home/zyan/notes.txt", is_dir: false, is_symlink: false, size: 120, modified: 1790000000, extension: "txt", hidden: false }],
+      only_b: [{ name: "guide.md", path: "/home/zyan/guide.md", is_dir: false, is_symlink: false, size: 300, modified: 1790000000, extension: "md", hidden: false }],
+      different: [{ name: "img.png", path: "/home/zyan/img.png", is_dir: false, is_symlink: false, size: 6400, modified: 1790000000, extension: "png", hidden: false }],
+      same: 2
+    };
+    if (cmd === "thumb") return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    if (cmd === "search_content") return [
+      { entry: { name: "notes.txt", path: "/home/zyan/notes.txt", is_dir: false, is_symlink: false, size: 120, modified: 1790000000, extension: "txt", hidden: false }, line: 2, snippet: "second line mentions hello" },
+      { entry: { name: "guide.md", path: "/home/zyan/guide.md", is_dir: false, is_symlink: false, size: 300, modified: 1790000000, extension: "md", hidden: false }, line: 5, snippet: "hello from the guide" }
+    ];
+    if (cmd === "find_duplicates") return [
+      { size: 120, entries: [
+        { name: "notes.txt", path: "/home/zyan/notes.txt", is_dir: false, is_symlink: false, size: 120, modified: 1790000000, extension: "txt", hidden: false },
+        { name: "notes-copy.txt", path: "/home/zyan/notes-copy.txt", is_dir: false, is_symlink: false, size: 120, modified: 1790000000, extension: "txt", hidden: false }
+      ] }
+    ];
+    if (cmd === "list_apps_for") return [
+      { name: "Text Editor", exec: "gedit %f", mime_types: ["text/plain"], desktop: "org.gnome.TextEditor.desktop" },
+      { name: "Code", exec: "code %f", mime_types: ["text/plain"], desktop: "code.desktop" }
+    ];
+    if (cmd === "list_archive") return [
+      { name: "a.txt", size: 12, is_dir: false },
+      { name: "sub/", size: 0, is_dir: true },
+      { name: "sub/b.txt", size: 34, is_dir: false }
+    ];
+    if (cmd === "file_sha256") return "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    if (cmd === "set_permissions") return "640";
+    if (cmd === "set_default_app") return null;
+    if (cmd === "open_with") return null;
     if (cmd === "move_paths" || cmd === "copy_paths") return 1;
     if (cmd === "compress_paths") return "notes.txt.zip";
     if (cmd === "extract_archive") return "tree";

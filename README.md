@@ -16,26 +16,47 @@ FileMon is a Windows Explorer-style file manager for Linux, built with [Tauri v2
 
 - **Explorer shell** — sidebar with Quick access, Trash, and drives; breadcrumbs; back/forward/up navigation with history.
 - **Two views** — details table (name, date modified, type, size, sortable) and icon grid. The choice is remembered per tab.
-- **Tabs** — each tab keeps its own folder, history, view, and sort. Ctrl+T opens a tab, Ctrl+W closes it, Ctrl+Tab cycles, middle-click closes, Ctrl+double-click opens a folder in a new tab.
+- **Tabs** — each tab keeps its own folder, history, view, and sort. Ctrl+T opens a tab, Ctrl+W closes it, Ctrl+Tab cycles, middle-click closes, Ctrl+double-click opens a folder in a new tab. Ctrl+Shift+T reopens the last closed tab, with its old view and sort. Tabs and the active pane are restored on launch.
+- **Address bar** — Ctrl+L swaps the breadcrumbs for an editable path: type a folder (a leading `~` expands to Home, a relative path resolves against the current folder), Enter jumps there, Esc puts the breadcrumbs back.
+- **Advanced filters** — the funnel button in the toolbar filters the listing by type (folders, images, video, audio, documents, archives, code, other), extension, size range, and modified-date range. Folders count by their computed size.
+- **Dual pane** — Ctrl+Shift+D splits the file area into two independent panes, each with its own tabs and folder. Click a pane to make it active (Alt+1 / Alt+2 also work); F5 copies the selection to the other pane, F6 moves it. Dragging between panes works too.
+- **Compare folders** — in dual pane, right-click and choose "Compare with other pane": the active pane lists what exists only here, only there, and what differs (same name, different size or content; folders with the same name are not recursed into). Two buttons copy the missing files either way, then the compare refreshes.
 - **Quick access pins** — right-click any folder and pin it to the sidebar. Pins survive restarts; folders that no longer exist are pruned on launch.
-- **Folder sizes** — the Size column shows real folder sizes, computed in the background so the listing never blocks. Selecting a folder adds its size to the status-bar total.
-- **Image thumbnails** — the icon grid shows real previews of image files, loaded lazily with a generic icon as fallback.
+- **Folder sizes** — the Size column shows real folder sizes, computed in the background so the listing never blocks. Selecting a folder adds its size to the status-bar total. Sorting by Size orders folders among files by their computed size.
+- **Image thumbnails** — the icon grid shows real previews of image files, loaded lazily with a generic icon as fallback. Thumbnails are downscaled and cached on disk under `~/.cache/filemon/thumbs`, keyed by path, size, and modification time, so a revisited folder does not regenerate them; an edited file re-renders.
+- **Video thumbnails** — the first frame of a video file, extracted by ffmpeg (in-page `<video>` is avoided: this WebKitGTK crashes its web process on any `<video>` load, GStreamer autoaudiosink missing), and cached on disk the same way. Graceful icon fallback when ffmpeg or the file fails.
+- **Icons per file type** — every file kind gets its own icon: images, videos, audio, documents, spreadsheets, presentations, archives, applications, code, and text files. Symlinks get a link icon.
+- **Group by** — group the listing by type, date, or size, with collapsible headers that show the item count. Per tab, set from the Appearance panel.
+- **Drive usage bars** — each drive in the sidebar shows a bar of used space and its free space; the bar turns red at 90% used.
+
+### Appearance
+
+- **Appearance panel** — the sliders button in the toolbar opens one panel for Group by, density, interface scale, and icon-grid size.
+- **Grid zoom** — Small / Medium / Large tiles per tab, or Ctrl+scroll / Ctrl+= / Ctrl+− in the icon grid.
+- **Density** — Compact or Comfortable row spacing, remembered.
+- **Interface scale** — 90% / 100% / 110% / 125% UI zoom, remembered.
+- **Quick Look** — press Space on a single selected file for a large preview (image, video first frame, PDF first page, highlighted code, folder summary); Left/Right step through the folder, Esc or Space closes. Also in the right-click menu.
+- **Empty state** — an empty folder shows a large folder icon, a short explanation, and a New folder button; a search with no matches offers to clear the search.
 
 ### File operations
 
 - **Copy, cut, paste, rename, new folder, new file** — with a progress panel for large transfers (chunked copies, cancel support) and a **Compress to ZIP / Extract here** pair with zip-slip protection.
+- **Batch rename** — rename many files at once with find/replace, prefix, suffix, and numbering, with a live old → new preview and collision check.
+- **Open With** — right-click a file to open it with any application that handles its type; tick "Always use the chosen app for this file type" to make it the default (xdg-mime). Copy Path copies the selected paths.
+- **Properties** — the Properties dialog shows type, location, size, and modification date, plus an octal permission editor (Apply runs chmod) and the file's SHA-256, computed after the dialog opens so a large file never delays it, with a Copy button.
 - **Trash** — deleting moves files to the freedesktop Trash. Restore them, delete them permanently, or empty the whole Trash from the sidebar.
-- **Drag & drop** — drag files onto folders, breadcrumbs, sidebar items, tabs, or the Trash. Dropping files in from another app copies them into the current folder.
+- **Drag & drop** — drag files onto folders, breadcrumbs, sidebar items, tabs, or the Trash. Dropping files in from another app copies them into the current folder. Dragging a file out of FileMon offers it to other apps as file URIs.
+- **Find duplicates** — scans the current folder tree for files with identical content (size, then hash, then byte comparison) and lets you delete all but the first of each group.
 - **Open in Terminal** — right-click a folder, a file, or empty space to open a terminal at that location. It honours `$TERMINAL`, then tries foot, Alacritty, Kitty, WezTerm, Ghostty, GNOME Terminal, Konsole, and others.
 
 ### Search and preview
 
-- **Search** — instant name filter of the current folder; Enter searches recursively below it.
-- **Preview pane** — image preview and text preview of the selected file, folder summary otherwise.
+- **Search** — instant name filter of the current folder; Enter searches recursively below it. The T button in the search box switches to content search, which finds text inside files and shows the matching line.
+- **Preview pane** — image preview (click to toggle actual size, dimensions shown), text preview with line numbers and syntax highlighting for code, Markdown files rendered as formatted text, archive contents listed without extracting, and PDF first page rendered by the built-in viewer; folder summary otherwise.
 
 ### Keyboard
 
-Arrows move the selection (a full row in Icons view), Left/Right step one tile, Home/End jump to first/last, PageUp/PageDown move a screen, Enter opens. Alt+Left/Right go back/forward, Alt+Up and Backspace go up a level, Ctrl+C/X/V copy/cut/paste, Delete deletes, F2 renames, Ctrl+F focuses search.
+Arrows move the selection (a full row in Icons view), Left/Right step one tile, Home/End jump to first/last, PageUp/PageDown move a screen, Enter opens. Hold Shift with any of them to extend the selection as a range. Alt+Left/Right go back/forward, Alt+Up and Backspace go up a level, Ctrl+C/X/V copy/cut/paste, Delete deletes, F2 renames, Ctrl+F focuses search, Ctrl+H toggles hidden files, Ctrl+L focuses the address bar, Ctrl+T opens a tab, Ctrl+W closes it, Ctrl+Shift+T reopens the last closed tab. Space opens Quick Look on the selected file. In dual pane: Ctrl+Shift+D toggles it, Alt+1/Alt+2 switch the active pane, F5 copies the selection to the other pane, F6 moves it. In the icon grid: Ctrl+scroll or Ctrl+= / Ctrl+− changes the tile size.
 
 ![Details view — folder sizes, dark theme](docs/images/screenshot-details.png)
 
@@ -47,14 +68,14 @@ Linux (x86_64) only. Get the latest release from the
 **AppImage (recommended):**
 
 ```bash
-chmod +x FileMon_0.1.0_amd64.AppImage
-./FileMon_0.1.0_amd64.AppImage
+chmod +x FileMon_0.1.1_amd64.AppImage
+./FileMon_0.1.1_amd64.AppImage
 ```
 
 **Debian package (Debian/Ubuntu):**
 
 ```bash
-sudo apt install ./FileMon_0.1.0_amd64.deb
+sudo apt install ./FileMon_0.1.1_amd64.deb
 ```
 
 Installs `filemon` to `/usr/bin` with an app-menu entry; dependencies are pulled in automatically.
@@ -62,7 +83,7 @@ Installs `filemon` to `/usr/bin` with an app-menu entry; dependencies are pulled
 **RPM package (Fedora/openSUSE):**
 
 ```bash
-sudo dnf install ./FileMon-0.1.0-1.x86_64.rpm
+sudo dnf install ./FileMon-0.1.1-1.x86_64.rpm
 ```
 
 **Standalone binary:**
@@ -75,7 +96,7 @@ On Arch / CachyOS there is no `dpkg` or `apt`, so install from the `.deb` payloa
 
 ```bash
 mkdir -p ~/filemon-deb && cd ~/filemon-deb
-ar x FileMon_0.1.0_amd64.deb
+ar x FileMon_0.1.1_amd64.deb
 sudo tar -xzf data.tar.gz -C /
 sudo update-desktop-database /usr/share/applications
 sudo gtk-update-icon-cache /usr/share/icons/hicolor
@@ -118,7 +139,7 @@ Tests:
 
 ```bash
 cd src-tauri
-cargo test           # 19 tests: transfer engine, zip, trash, terminal detection, folder sizes
+cargo test           # 24 tests: transfer engine, zip, trash, terminal detection, folder sizes, compare, archive, thumbnails, permissions
 ```
 
 ## Design
