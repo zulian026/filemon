@@ -23,7 +23,7 @@ pub struct Entry {
     pub original_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct Drive {
     pub name: String,
     pub mount: String,
@@ -31,6 +31,10 @@ pub struct Drive {
     pub free: u64,
     pub fs: String,
     pub removable: bool,
+    #[serde(default)]
+    pub device: Option<String>,
+    #[serde(default)]
+    pub mounted: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,14 +98,132 @@ pub fn list_dir(path: &Path) -> Result<Vec<Entry>, String> {
     Ok(out)
 }
 
-/// Mounted drives, from sysinfo. Snap/loop mounts are hidden: they are not
-/// places a user browses to. Zero-size entries (binds, pseudo-filesystems)
-/// are dropped, and the label is the mount point: sysinfo's Linux disk name
-/// is the raw device path, which repeats for every mount of one disk.
-pub fn drives() -> Vec<Drive> {
+/// Resolve multiple file/folder paths into `Entry` structs. Missing or unreadable
+/// paths are skipped cleanly.
+pub fn get_entries(paths: &[String]) -> Vec<Entry> {
+    let mut out = Vec::new();
+    for p_str in paths {
+        let p = PathBuf::from(p_str);
+        if let Ok(md) = fs::metadata(&p) {
+            out.push(entry_from(&p, &md));
+        }
+    }
+    out
+}
+
+#[derive(serde::Deserialize)]
+struct LsblkOutput {
+    #[serde(default)]
+    blockdevices: Vec<LsblkDevice>,
+}
+
+#[derive(serde::Deserialize)]
+struct LsblkDevice {
+    name: Option<String>,
+    path: Option<String>,
+    label: Option<String>,
+    fstype: Option<String>,
+    #[serde(default)]
+    mountpoints: Vec<Option<String>>,
+    size: Option<u64>,
+    fsavail: Option<u64>,
+    rm: Option<bool>,
+    #[serde(default)]
+    children: Vec<LsblkDevice>,
+}
+
+fn collect_lsblk_drives(devs: Vec<LsblkDevice>, out: &mut Vec<Drive>) {
+    for dev in devs {
+        if !dev.children.is_empty() {
+            collect_lsblk_drives(dev.children, out);
+        } else {
+            let fstype = dev.fstype.clone().unwrap_or_default();
+            if fstype == "swap" {
+                continue;
+            }
+            let size = dev.size.unwrap_or(0);
+            if size == 0 {
+                continue;
+            }
+            // Skip tiny partition without filesystem and without label (e.g. 16MB MSR)
+            if fstype.is_empty() && dev.label.as_deref().unwrap_or("").trim().is_empty() && size < 100_000_000 {
+                continue;
+            }
+
+            let valid_mounts: Vec<String> = dev
+                .mountpoints
+                .into_iter()
+                .flatten()
+                .filter(|m| !m.is_empty() && m != "[SWAP]")
+                .collect();
+
+            let mounted = !valid_mounts.is_empty();
+            let primary_mount = if valid_mounts.iter().any(|m| m == "/") {
+                "/".to_string()
+            } else if let Some(m) = valid_mounts.iter().find(|m| m.starts_with("/run/media") || m.starts_with("/media") || m.starts_with("/mnt")) {
+                m.clone()
+            } else if let Some(m) = valid_mounts.first() {
+                m.clone()
+            } else {
+                String::new()
+            };
+
+            // Filter out internal system subvolumes/binds if root is already /
+            if primary_mount.starts_with("/var/")
+                || primary_mount == "/srv"
+                || primary_mount == "/root"
+            {
+                continue;
+            }
+
+            let name = if let Some(ref l) = dev.label {
+                let s = l.trim();
+                if !s.is_empty() {
+                    s.to_string()
+                } else if primary_mount == "/" {
+                    "System disk".to_string()
+                } else if !primary_mount.is_empty() {
+                    Path::new(&primary_mount)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| primary_mount.clone())
+                } else if let Some(ref p) = dev.path {
+                    p.clone()
+                } else {
+                    dev.name.clone().unwrap_or_else(|| "Partition".to_string())
+                }
+            } else if primary_mount == "/" {
+                "System disk".to_string()
+            } else if !primary_mount.is_empty() {
+                Path::new(&primary_mount)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| primary_mount.clone())
+            } else if let Some(ref p) = dev.path {
+                p.clone()
+            } else {
+                dev.name.clone().unwrap_or_else(|| "Partition".to_string())
+            };
+
+            let free = dev.fsavail.unwrap_or(0);
+            let removable = dev.rm.unwrap_or(false);
+
+            out.push(Drive {
+                name,
+                mount: primary_mount,
+                total: size,
+                free,
+                fs: fstype,
+                removable,
+                device: dev.path,
+                mounted,
+            });
+        }
+    }
+}
+
+fn drives_from_sysinfo() -> Vec<Drive> {
     use sysinfo::Disks;
-    // Refresh the list AND the sizes: with DiskRefreshKind::nothing() the
-    // mounts show up but total/free stay 0, which the filter then drops.
     let disks = Disks::new_with_refreshed_list();
     let mut out: Vec<Drive> = disks
         .iter()
@@ -110,27 +232,124 @@ pub fn drives() -> Vec<Drive> {
             d.total_space() > 0
                 && !m.starts_with("/snap")
                 && !m.starts_with("/var/lib/snapd")
+                && !m.starts_with("/var/")
+                && m != "/srv"
+                && m != "/root"
                 && !d.name().to_string_lossy().starts_with("loop")
         })
         .map(|d| {
             let mount = d.mount_point().to_string_lossy().into_owned();
+            let name = if mount == "/" {
+                "System disk".into()
+            } else if mount.starts_with("/run/media/") || mount.starts_with("/media/") || mount.starts_with("/mnt/") {
+                Path::new(&mount)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| mount.clone())
+            } else {
+                mount.clone()
+            };
             Drive {
-                name: if mount == "/" {
-                    "System disk".into()
-                } else {
-                    mount.clone()
-                },
+                name,
                 mount,
                 total: d.total_space(),
                 free: d.available_space(),
                 fs: d.file_system().to_string_lossy().into_owned(),
                 removable: d.is_removable(),
+                device: Some(d.name().to_string_lossy().into_owned()),
+                mounted: true,
             }
         })
         .collect();
     out.sort_by(|a, b| a.mount.cmp(&b.mount));
     out.dedup_by(|a, b| a.mount == b.mount);
     out
+}
+
+/// Drives and partitions detection via lsblk (with sysinfo fallback).
+/// Lists mounted partitions and unmounted storage devices with volume labels.
+pub fn drives() -> Vec<Drive> {
+    let mut list = Vec::new();
+    if let Ok(out) = std::process::Command::new("lsblk")
+        .args(["-J", "-b", "-o", "NAME,PATH,LABEL,FSTYPE,MOUNTPOINTS,SIZE,FSAVAIL,RM,TYPE"])
+        .output()
+    {
+        if out.status.success() {
+            if let Ok(parsed) = serde_json::from_slice::<LsblkOutput>(&out.stdout) {
+                collect_lsblk_drives(parsed.blockdevices, &mut list);
+            }
+        }
+    }
+
+    if list.is_empty() {
+        return drives_from_sysinfo();
+    }
+
+    // Sort drives: System disk first, then mounted drives by name, then unmounted drives
+    list.sort_by(|a, b| {
+        let a_root = a.mount == "/";
+        let b_root = b.mount == "/";
+        if a_root != b_root {
+            return b_root.cmp(&a_root);
+        }
+        if a.mounted != b.mounted {
+            return b.mounted.cmp(&a.mounted);
+        }
+        a.name.to_lowercase().cmp(&b.name.to_lowercase())
+    });
+
+    list.dedup_by(|a, b| {
+        if !a.mount.is_empty() && a.mount == b.mount {
+            return true;
+        }
+        if a.device.is_some() && a.device == b.device {
+            return true;
+        }
+        false
+    });
+
+    list
+}
+
+pub fn mount_drive(device: &str) -> Result<String, String> {
+    let out = std::process::Command::new("udisksctl")
+        .args(["mount", "-b", device])
+        .output()
+        .map_err(|e| format!("Failed to run udisksctl: {}", e))?;
+
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(err.trim().to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if let Some(pos) = stdout.find(" at ") {
+        let path = stdout[pos + 4..].trim().trim_end_matches('.');
+        return Ok(path.to_string());
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    let all = drives();
+    if let Some(d) = all.iter().find(|d| d.device.as_deref() == Some(device) && d.mounted && !d.mount.is_empty()) {
+        return Ok(d.mount.clone());
+    }
+
+    Ok(stdout.trim().to_string())
+}
+
+pub fn unmount_drive(target: &str) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("udisksctl");
+    if target.starts_with("/dev/") {
+        cmd.args(["unmount", "-b", target]);
+    } else {
+        cmd.args(["unmount", "-p", target]);
+    }
+    let out = cmd.output().map_err(|e| format!("Failed to run udisksctl: {}", e))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(err.trim().to_string());
+    }
+    Ok(())
 }
 
 /// Recursive name search under `root`. Bounded: max depth 10, 20 000 visited
@@ -1045,7 +1264,7 @@ fn remove_trash_item(p: &Path) -> Result<(), String> {
 /// folder is recreated; a name collision at the original location gets a
 /// " (copy)" suffix (via move_paths). Items without a .trashinfo are
 /// restored to the home folder instead of being lost.
-pub fn restore_trash_in(files_dir: &Path, info_dir: &Path, paths: &[PathBuf]) -> Result<usize, String> {
+pub fn restore_trash_in(_files_dir: &Path, info_dir: &Path, paths: &[PathBuf]) -> Result<usize, String> {
     let mut done = 0;
     for trash_path in paths {
         let name = trash_path
@@ -1070,7 +1289,7 @@ pub fn restore_trash(paths: &[PathBuf]) -> Result<usize, String> {
 }
 
 /// Delete trashed items permanently (bypassing the Trash) with their .trashinfo.
-pub fn delete_trash_in(files_dir: &Path, info_dir: &Path, paths: &[PathBuf]) -> Result<usize, String> {
+pub fn delete_trash_in(_files_dir: &Path, info_dir: &Path, paths: &[PathBuf]) -> Result<usize, String> {
     let mut done = 0;
     for trash_path in paths {
         let name = trash_path
@@ -1476,6 +1695,135 @@ pub fn folder_size(path: &Path, gen: &AtomicU64, want: u64) -> Result<u64, Strin
     Ok(total)
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SpaceChild {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub file_count: u64,
+    pub dir_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiskUsageReport {
+    pub path: String,
+    pub name: String,
+    pub total_size: u64,
+    pub total_files: u64,
+    pub total_dirs: u64,
+    pub items: Vec<SpaceChild>,
+}
+
+pub static ANALYZE_GEN: AtomicU64 = AtomicU64::new(0);
+
+pub fn cancel_analyze_space() {
+    ANALYZE_GEN.fetch_add(1, Ordering::SeqCst);
+}
+
+pub fn analyze_space(root: &Path) -> Result<DiskUsageReport, String> {
+    let gen = ANALYZE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    let rd = fs::read_dir(root).map_err(|e| format!("Cannot read {}: {}", root.display(), e))?;
+
+    let root_name = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| root.to_string_lossy().into_owned());
+
+    let mut items = Vec::new();
+    let mut total_size: u64 = 0;
+    let mut total_files: u64 = 0;
+    let mut total_dirs: u64 = 0;
+
+    for entry in rd.flatten() {
+        if ANALYZE_GEN.load(Ordering::Relaxed) != gen {
+            return Err("cancelled".to_string());
+        }
+        let p = entry.path();
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        if ft.is_symlink() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy().into_owned();
+
+        if ft.is_dir() {
+            let mut dir_size: u64 = 0;
+            let mut files_in_dir: u64 = 0;
+            let mut dirs_in_dir: u64 = 0;
+            let mut stack = vec![p.clone()];
+            let mut checked: u64 = 0;
+
+            while let Some(current_dir) = stack.pop() {
+                let sub_rd = match fs::read_dir(&current_dir) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                for sub_entry in sub_rd.flatten() {
+                    checked += 1;
+                    if checked % 512 == 0 && ANALYZE_GEN.load(Ordering::Relaxed) != gen {
+                        return Err("cancelled".to_string());
+                    }
+                    let sub_ft = match sub_entry.file_type() {
+                        Ok(t) => t,
+                        Err(_) => continue,
+                    };
+                    if sub_ft.is_symlink() {
+                        continue;
+                    }
+                    if sub_ft.is_dir() {
+                        dirs_in_dir += 1;
+                        stack.push(sub_entry.path());
+                    } else if let Ok(md) = sub_entry.metadata() {
+                        files_in_dir += 1;
+                        dir_size = dir_size.saturating_add(md.len());
+                    }
+                }
+            }
+
+            total_size = total_size.saturating_add(dir_size);
+            total_files += files_in_dir;
+            total_dirs += dirs_in_dir + 1;
+
+            items.push(SpaceChild {
+                name,
+                path: p.to_string_lossy().into_owned(),
+                is_dir: true,
+                size: dir_size,
+                file_count: files_in_dir,
+                dir_count: dirs_in_dir,
+            });
+        } else if let Ok(md) = entry.metadata() {
+            let file_size = md.len();
+            total_size = total_size.saturating_add(file_size);
+            total_files += 1;
+
+            items.push(SpaceChild {
+                name,
+                path: p.to_string_lossy().into_owned(),
+                is_dir: false,
+                size: file_size,
+                file_count: 1,
+                dir_count: 0,
+            });
+        }
+    }
+
+    items.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
+
+    Ok(DiskUsageReport {
+        path: root.to_string_lossy().into_owned(),
+        name: root_name,
+        total_size,
+        total_files,
+        total_dirs,
+        items,
+    })
+}
+
 // ---- Open in Terminal ----
 // Terminals are tried in order; every one of them starts its shell in the
 // inherited working directory, so no per-terminal --working-directory flag
@@ -1829,6 +2177,126 @@ pub fn format_size(bytes: u64) -> String {
     format!("{:.1} {}", v, UNITS[i])
 }
 
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct GitRepoInfo {
+    pub root: String,
+    pub branch: String,
+    pub is_clean: bool,
+    pub ahead: u32,
+    pub behind: u32,
+    pub statuses: std::collections::HashMap<String, String>,
+    pub dir_statuses: std::collections::HashMap<String, String>,
+}
+
+/// Query Git status for a folder: branch name, sync counts (ahead/behind),
+/// and working-tree change statuses per file and directory.
+/// Returns None if the folder is not within a Git repository or git fails.
+pub fn get_git_info(folder: &Path) -> Option<GitRepoInfo> {
+    let mut repo_root: Option<PathBuf> = None;
+    for ancestor in folder.ancestors() {
+        if ancestor.join(".git").exists() {
+            repo_root = Some(ancestor.to_path_buf());
+            break;
+        }
+    }
+    let repo_root = repo_root?;
+
+    let out = std::process::Command::new("git")
+        .args(["-c", "core.quotepath=false", "status", "--porcelain=v1", "-b", "-uall"])
+        .current_dir(&repo_root)
+        .output()
+        .ok()?;
+
+    if !out.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut branch = String::from("HEAD");
+    let mut ahead = 0u32;
+    let mut behind = 0u32;
+    let mut is_clean = true;
+    let mut statuses = std::collections::HashMap::new();
+    let mut dir_statuses = std::collections::HashMap::new();
+
+    let mut lines = stdout.lines();
+    if let Some(first_line) = lines.next() {
+        if let Some(rest) = first_line.strip_prefix("## ") {
+            let mut branch_part = rest;
+            if let Some(bracket_start) = branch_part.find('[') {
+                if let Some(bracket_end) = branch_part.find(']') {
+                    let sync_info = &branch_part[bracket_start + 1..bracket_end];
+                    for part in sync_info.split(',') {
+                        let p = part.trim();
+                        if let Some(n) = p.strip_prefix("ahead ") {
+                            ahead = n.trim().parse().unwrap_or(0);
+                        } else if let Some(n) = p.strip_prefix("behind ") {
+                            behind = n.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+                branch_part = branch_part[..bracket_start].trim();
+            }
+            if let Some(dots) = branch_part.find("...") {
+                branch = branch_part[..dots].trim().to_string();
+            } else {
+                branch = branch_part.trim().to_string();
+            }
+        }
+    }
+
+    for line in lines {
+        if line.len() < 3 {
+            continue;
+        }
+        is_clean = false;
+        let code = &line[0..2];
+        let mut path_str = line[3..].trim();
+        if let Some(arrow) = path_str.find(" -> ") {
+            path_str = &path_str[arrow + 4..];
+        }
+        let path_clean = path_str.trim_matches('"');
+        let abs_path = repo_root.join(path_clean);
+        let abs_str = abs_path.to_string_lossy().to_string();
+
+        let status_char = if code.contains('?') {
+            "?"
+        } else if code.contains('A') {
+            "A"
+        } else if code.contains('D') {
+            "D"
+        } else if code.contains('R') {
+            "R"
+        } else if code.contains('U') {
+            "U"
+        } else {
+            "M"
+        };
+
+        statuses.insert(abs_str.clone(), status_char.to_string());
+
+        let mut curr = abs_path.parent();
+        while let Some(p) = curr {
+            if p == repo_root.as_path() {
+                break;
+            }
+            let dir_str = p.to_string_lossy().to_string();
+            dir_statuses.entry(dir_str).or_insert_with(|| status_char.to_string());
+            curr = p.parent();
+        }
+    }
+
+    Some(GitRepoInfo {
+        root: repo_root.to_string_lossy().to_string(),
+        branch,
+        is_clean,
+        ahead,
+        behind,
+        statuses,
+        dir_statuses,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1842,6 +2310,16 @@ mod tests {
         assert_eq!(format_size(1536), "1.5 KB");
         assert_eq!(format_size(2 * 1024 * 1024), "2.0 MB");
         assert_eq!(format_size(3 * 1024 * 1024 * 1024), "3.0 GB");
+    }
+
+    #[test]
+    fn git_info_finds_current_repo() {
+        let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let info = get_git_info(&here);
+        assert!(info.is_some(), "should detect git repository for filemon");
+        let info = info.unwrap();
+        assert!(!info.branch.is_empty(), "branch must not be empty");
+        assert!(!info.root.is_empty(), "root must not be empty");
     }
 
     #[test]
@@ -1907,6 +2385,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+
     #[test]
     fn find_terminal_probe_order() {
         let base = std::env::temp_dir().join("filemon-test-term");
@@ -1936,6 +2415,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+
     #[test]
     fn open_terminal_rejects_missing_dir() {
         let err = open_terminal(Path::new("/definitely/not/a/real/folder")).unwrap_err();
@@ -1952,6 +2432,7 @@ mod tests {
         assert!(!path_exists(&base.join("nope")));
         let _ = fs::remove_dir_all(&base);
     }
+
 
     #[test]
     fn folder_size_sums_nested_tree() {
@@ -1972,6 +2453,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+
     #[test]
     fn folder_size_cancel_stops_a_big_walk() {
         let base = std::env::temp_dir().join("filemon-test-fsize-cancel");
@@ -1986,6 +2468,7 @@ mod tests {
         assert_eq!(err, "cancelled");
         let _ = fs::remove_dir_all(&base);
     }
+
 
     #[test]
     fn trashinfo_encoding() {
@@ -2103,6 +2586,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+
     #[test]
     fn drives_have_sizes() {
         // Guards the DiskRefreshKind::nothing() trap: mounts listed but
@@ -2158,6 +2642,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+
     #[test]
     fn transfer_cancel_stops_early() {
         let base = std::env::temp_dir().join("filemon-test-transfer-cancel");
@@ -2188,6 +2673,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+
     #[test]
     fn transfer_move_same_device_is_instant() {
         let base = std::env::temp_dir().join("filemon-test-transfer-move");
@@ -2214,6 +2700,7 @@ mod tests {
         assert!(!src.join("m.txt").exists());
         let _ = fs::remove_dir_all(&base);
     }
+
 
     #[test]
     fn zip_roundtrip_restores_tree_and_symlink() {
@@ -2242,6 +2729,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+
     #[test]
     fn zip_slip_entry_writes_nothing() {
         let base = std::env::temp_dir().join("filemon-test-zip-slip");
@@ -2265,6 +2753,7 @@ mod tests {
         assert!(!dst.join("evil.txt").exists());
         let _ = fs::remove_dir_all(&base);
     }
+
 
     #[test]
     fn zip_and_extract_collision_stays_in_dest() {
@@ -2304,6 +2793,7 @@ mod tests {
             .exists());
         let _ = fs::remove_dir_all(&base);
     }
+
 
     #[test]
     fn desktop_parse_and_exec_substitution() {
@@ -2428,6 +2918,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+
     #[test]
     fn thumb_disk_cache() {
         let cache = std::env::temp_dir().join("filemon-test-thumbcache");
@@ -2502,6 +2993,7 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
+
     #[test]
     fn content_search_and_duplicates() {
         let base = std::env::temp_dir().join("filemon-test-content");
@@ -2533,6 +3025,53 @@ mod tests {
         assert!(groups[0].entries.iter().any(|e| e.name == "dup1.txt"));
         assert!(groups[0].entries.iter().any(|e| e.name == "dup2.txt"));
         assert_eq!(groups[0].size, 12);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn get_entries_returns_metadata() {
+        let base = std::env::temp_dir().join("filemon-test-get-entries");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let f1 = base.join("test1.txt");
+        let f2 = base.join("test2.md");
+        fs::write(&f1, "hello").unwrap();
+        fs::write(&f2, "world!!").unwrap();
+
+        let entries = get_entries(&[
+            f1.to_string_lossy().to_string(),
+            f2.to_string_lossy().to_string(),
+            base.join("nonexistent.txt").to_string_lossy().to_string(),
+        ]);
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|e| e.name == "test1.txt" && e.size == Some(5)));
+        assert!(entries.iter().any(|e| e.name == "test2.md" && e.size == Some(7)));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn analyze_space_calculates_recursive_usage() {
+        let base = std::env::temp_dir().join("filemon-test-analyze-space");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("dir_a/nested")).unwrap();
+        fs::create_dir_all(base.join("dir_b")).unwrap();
+        fs::write(base.join("dir_a/file1.txt"), "12345").unwrap(); // 5 bytes
+        fs::write(base.join("dir_a/nested/file2.bin"), "1234567890").unwrap(); // 10 bytes -> dir_a = 15 bytes
+        fs::write(base.join("dir_b/small.txt"), "ab").unwrap(); // 2 bytes -> dir_b = 2 bytes
+        fs::write(base.join("root_file.md"), "hello!").unwrap(); // 6 bytes
+
+        let rep = analyze_space(&base).unwrap();
+        assert_eq!(rep.total_size, 23);
+        assert_eq!(rep.total_files, 4);
+        assert_eq!(rep.items.len(), 3);
+        // Largest first: dir_a (15), root_file.md (6), dir_b (2)
+        assert_eq!(rep.items[0].name, "dir_a");
+        assert_eq!(rep.items[0].size, 15);
+        assert_eq!(rep.items[0].file_count, 2);
+        assert_eq!(rep.items[1].name, "root_file.md");
+        assert_eq!(rep.items[1].size, 6);
+        assert_eq!(rep.items[2].name, "dir_b");
+        assert_eq!(rep.items[2].size, 2);
         let _ = fs::remove_dir_all(&base);
     }
 }

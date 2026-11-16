@@ -20,6 +20,18 @@ type Drive = {
   free: number;
   fs: string;
   removable: boolean;
+  device?: string;
+  mounted?: boolean;
+};
+
+type GitRepoInfo = {
+  root: string;
+  branch: string;
+  is_clean: boolean;
+  ahead: number;
+  behind: number;
+  statuses: Record<string, string>;
+  dir_statuses: Record<string, string>;
 };
 
 type Properties = {
@@ -35,6 +47,25 @@ type Properties = {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
+type TagKey = "red" | "orange" | "yellow" | "green" | "blue" | "purple";
+
+interface TagDef {
+  key: TagKey;
+  label: string;
+  color: string;
+  lightColor: string;
+}
+
+const TAG_DEFS: Record<TagKey, TagDef> = {
+  red: { key: "red", label: "Red", color: "#ef4444", lightColor: "#dc2626" },
+  orange: { key: "orange", label: "Orange", color: "#f97316", lightColor: "#ea580c" },
+  yellow: { key: "yellow", label: "Yellow", color: "#eab308", lightColor: "#ca8a04" },
+  green: { key: "green", label: "Green", color: "#22c55e", lightColor: "#16a34a" },
+  blue: { key: "blue", label: "Blue", color: "#3b82f6", lightColor: "#2563eb" },
+  purple: { key: "purple", label: "Purple", color: "#a855f7", lightColor: "#9333ea" },
+};
+const ALL_TAGS: TagKey[] = ["red", "orange", "yellow", "green", "blue", "purple"];
+
 type Tab = {
   id: number;
   path: string;
@@ -44,6 +75,7 @@ type Tab = {
   sortKey: "name" | "size" | "modified" | "type";
   sortDir: number;
   isTrash: boolean;
+  tag?: TagKey | null;
   zoom: 0 | 1 | 2;
   groupBy: "none" | "type" | "date" | "size";
 };
@@ -85,6 +117,7 @@ type ClosedTab = {
   sortKey: Tab["sortKey"];
   sortDir: number;
   isTrash: boolean;
+  tag?: TagKey | null;
   zoom: Tab["zoom"];
   groupBy: Tab["groupBy"];
 };
@@ -227,6 +260,12 @@ const state = {
   set isTrash(v: boolean) {
     if (state.tabs[state.activeTab]) state.tabs[state.activeTab].isTrash = v;
   },
+  get tag(): TagKey | null {
+    return state.tabs[state.activeTab]?.tag ?? null;
+  },
+  set tag(v: TagKey | null) {
+    if (state.tabs[state.activeTab]) state.tabs[state.activeTab].tag = v;
+  },
   get entries(): Entry[] {
     return state.pane.entries;
   },
@@ -300,6 +339,7 @@ const state = {
   previewOpen: false,
   homeDir: "",
   pinned: [] as string[],
+  gitInfo: null as GitRepoInfo | null,
 };
 
 // Computed folder sizes for the current listing (path -> bytes). Filled in
@@ -405,7 +445,26 @@ const ICONS: Record<string, string> = {
   list: '<path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.5M2.5 8h.5M2.5 12h.5"/>',
   grid: '<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="0.5"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="0.5"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="0.5"/><rect x="9" y="9" width="4.5" height="4.5" rx="0.5"/>',
   undo: '<path d="M6.5 3.5L3 7l3.5 3.5"/><path d="M3 7h6a4 4 0 0 1 0 8H7"/>',
+  home: '<path d="M2.5 7.5L8 2.5l5.5 5V13a1 1 0 0 1-1 1h-3.5v-3.5h-2V14H3.5a1 1 0 0 1-1-1V7.5z"/>',
+  desktop: '<rect x="2" y="3" width="12" height="8" rx="1"/><path d="M8 11v2.5M5.5 13.5h5"/>',
+  download: '<path d="M8 2.5v7.5M4.5 7L8 10.5 11.5 7M2.5 13.5h11"/>',
+  pin: '<path d="M10 2l4 4-2 2-1-1-3 3v2.5L6.5 11 3 14.5 2 13.5l3.5-3.5-1.5-1.5H6.5l3-3-1-1 2-2z"/>',
+  command: '<path d="M2.5 3.5h11a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/><path d="M5 6.5l2 1.5-2 1.5M9 9.5h2"/>',
+  treemap: '<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M8 2.5v11M8 8h5.5"/>',
 };
+
+function quickIconFor(label: string): string {
+  switch (label.toLowerCase()) {
+    case "home": return ICONS.home;
+    case "desktop": return ICONS.desktop;
+    case "documents": return ICONS.doc;
+    case "downloads": return ICONS.download;
+    case "pictures": return ICONS.image;
+    case "music": return ICONS.audio;
+    case "videos": return ICONS.video;
+    default: return ICONS.folder;
+  }
+}
 
 function isImageEntry(e: Entry): boolean {
   if (e.is_dir) return false;
@@ -455,6 +514,25 @@ function iconFor(e: Entry): string {
   }
 }
 
+function iconForFileName(name: string): string {
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  if (IMAGE_EXTS.has(ext)) return ICONS.image;
+  switch (ext) {
+    case "mp4": case "mkv": case "webm": case "mov": case "avi": return ICONS.video;
+    case "mp3": case "flac": case "wav": case "ogg": case "m4a": return ICONS.audio;
+    case "zip": case "tar": case "gz": case "xz": case "7z": case "rar": case "deb": case "rpm": return ICONS.archive;
+    case "pdf": return ICONS.pdf;
+    case "doc": case "docx": case "odt": case "rtf": return ICONS.doc;
+    case "xls": case "xlsx": case "ods": case "csv": return ICONS.sheet;
+    case "ppt": case "pptx": case "odp": return ICONS.slides;
+    case "exe": case "AppImage": case "bin": case "run": case "msi": case "dmg": return ICONS.exec;
+    case "rs": case "py": case "js": case "ts": case "jsx": case "tsx": case "c": case "h": case "cpp": case "hpp": case "go": case "java": case "rb": case "php": case "swift": case "kt": case "html": case "css": case "scss": case "json": case "toml": case "yaml": case "yml": case "xml": case "sh": return ICONS.code;
+    case "txt": case "md": case "log": return ICONS.text;
+    default: return ICONS.file;
+  }
+}
+
 // Video extensions, for first-frame thumbnails in the icon grid.
 const VIDEO_EXTS = new Set(["mp4", "mkv", "webm", "mov", "avi"]);
 // Extensions whose preview pane gets syntax highlighting instead of plain text.
@@ -487,6 +565,7 @@ function parentOf(path: string): string | null {
 function driveFor(path: string): Drive | null {
   let best: Drive | null = null;
   for (const d of state.drives) {
+    if (!d.mount || d.mounted === false) continue;
     if ((path === d.mount || path.startsWith(d.mount.endsWith("/") ? d.mount : d.mount + "/")) && (!best || d.mount.length > best.mount.length)) {
       best = d;
     }
@@ -495,7 +574,9 @@ function driveFor(path: string): Drive | null {
 }
 
 async function navigate(path: string, push = true): Promise<void> {
-  state.isTrash = false;  if (push) {
+  state.isTrash = false;
+  state.tag = null;
+  if (push) {
     state.history = state.history.slice(0, state.histIndex + 1);
     state.history.push(path);
     state.histIndex = state.history.length - 1;
@@ -508,6 +589,7 @@ async function navigate(path: string, push = true): Promise<void> {
   state.anchor = null;
   await loadDir();
   updateNavButtons();
+  updateTrashNav();
 }
 
 /* ---- Address bar (Ctrl+L) ---- */
@@ -567,6 +649,7 @@ function cur(): Tab {
 }
 
 function tabTitle(t: Tab): string {
+  if (t.tag) return `${TAG_DEFS[t.tag]?.label || t.tag} Tag`;
   if (t.isTrash) return "Trash";
   if (t.path === "/") return "This PC";
   const name = t.path.replace(/\/+$/, "").split("/").pop() ?? "";
@@ -587,6 +670,7 @@ function saveTabs(paneIdx = state.activePane): void {
           sortKey: t.sortKey,
           sortDir: t.sortDir,
           isTrash: t.isTrash,
+          tag: t.tag,
           zoom: t.zoom,
           groupBy: t.groupBy,
         })),
@@ -600,7 +684,7 @@ function saveTabs(paneIdx = state.activePane): void {
 
 function restoreTabs(home: string, paneIdx = state.activePane): void {
   const p = state.panes[paneIdx];
-  let saved: { path: string; view: Tab["view"]; sortKey: Tab["sortKey"]; sortDir: number; isTrash?: boolean; zoom?: number; groupBy?: string }[] = [];
+  let saved: { path: string; view: Tab["view"]; sortKey: Tab["sortKey"]; sortDir: number; isTrash?: boolean; tag?: TagKey | null; zoom?: number; groupBy?: string }[] = [];
   const suffix = paneIdx === 0 ? "" : "-1";
   try {
     const raw = JSON.parse(localStorage.getItem("filemon-tabs" + suffix) ?? "[]");
@@ -612,7 +696,7 @@ function restoreTabs(home: string, paneIdx = state.activePane): void {
   // global view/sort as its defaults.
   const view = (localStorage.getItem("filemon-view") as Tab["view"]) || "details";
   const sortKey = (localStorage.getItem("filemon-sort") as Tab["sortKey"]) || "name";
-  const list = saved.filter((t) => typeof t?.path === "string" && t.path.startsWith("/"));
+  const list = saved.filter((t) => typeof t?.path === "string" && (t.path.startsWith("/") || t.path.startsWith("tag://")));
   const seeds = list.length > 0 ? list : [{ path: home, view, sortKey, sortDir: 1, isTrash: false }];
   p.tabs = seeds.map((t) => ({
     id: p.nextTabId++,
@@ -623,6 +707,7 @@ function restoreTabs(home: string, paneIdx = state.activePane): void {
     sortKey: (["name", "size", "modified", "type"].includes(t.sortKey) ? t.sortKey : "name") as Tab["sortKey"],
     sortDir: t.sortDir === -1 ? -1 : 1,
     isTrash: t.isTrash === true,
+    tag: (t.tag && ALL_TAGS.includes(t.tag as TagKey) ? t.tag : null) as TagKey | null,
     zoom: (t.zoom === 0 || t.zoom === 2 ? t.zoom : 1) as Tab["zoom"],
     groupBy: (["type", "date", "size"].includes(t.groupBy ?? "") ? t.groupBy : "none") as Tab["groupBy"],
   }));
@@ -701,6 +786,188 @@ async function prunePins(): Promise<void> {
   }
 }
 
+/* ---- Tags & Colors System ---- */
+
+const TAGS_KEY = "filemon-file-tags";
+
+function loadFileTags(): Record<string, TagKey[]> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TAGS_KEY) ?? "{}");
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      return raw as Record<string, TagKey[]>;
+    }
+  } catch {}
+  return {};
+}
+
+function saveFileTags(map: Record<string, TagKey[]>): void {
+  try {
+    localStorage.setItem(TAGS_KEY, JSON.stringify(map));
+  } catch {}
+}
+
+function getTagsForPath(path: string): TagKey[] {
+  const map = loadFileTags();
+  return map[path] || [];
+}
+
+function toggleTagForPaths(paths: string[], tag: TagKey): void {
+  if (paths.length === 0) return;
+  const map = loadFileTags();
+  const allHave = paths.every((p) => (map[p] || []).includes(tag));
+  for (const p of paths) {
+    const cur = map[p] || [];
+    if (allHave) {
+      const next = cur.filter((t) => t !== tag);
+      if (next.length === 0) delete map[p];
+      else map[p] = next;
+    } else {
+      if (!cur.includes(tag)) map[p] = [...cur, tag];
+    }
+  }
+  saveFileTags(map);
+  updateTagsOnView();
+  renderSidebar();
+  void updatePreview();
+  if (state.tag) {
+    void loadDir();
+  }
+}
+
+function clearTagsForPaths(paths: string[]): void {
+  const map = loadFileTags();
+  for (const p of paths) delete map[p];
+  saveFileTags(map);
+  updateTagsOnView();
+  renderSidebar();
+  void updatePreview();
+  if (state.tag) {
+    void loadDir();
+  }
+}
+
+function getPathsForTag(tag: TagKey): string[] {
+  const map = loadFileTags();
+  const res: string[] = [];
+  for (const [p, tags] of Object.entries(map)) {
+    if (tags.includes(tag)) res.push(p);
+  }
+  return res;
+}
+
+function getTagCounts(): Record<TagKey, number> {
+  const map = loadFileTags();
+  const counts: Record<TagKey, number> = {
+    red: 0,
+    orange: 0,
+    yellow: 0,
+    green: 0,
+    blue: 0,
+    purple: 0,
+  };
+  for (const tags of Object.values(map)) {
+    for (const t of tags) {
+      if (counts[t] !== undefined) counts[t]++;
+    }
+  }
+  return counts;
+}
+
+function renamePathInTags(oldPath: string, newPath: string): void {
+  const map = loadFileTags();
+  let changed = false;
+  for (const [p, tags] of Object.entries(map)) {
+    if (p === oldPath) {
+      map[newPath] = tags;
+      delete map[p];
+      changed = true;
+    } else if (p.startsWith(oldPath.endsWith("/") ? oldPath : oldPath + "/")) {
+      const updated = newPath + p.slice(oldPath.length);
+      map[updated] = tags;
+      delete map[p];
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveFileTags(map);
+    renderSidebar();
+  }
+}
+
+function removePathFromTags(path: string): void {
+  const map = loadFileTags();
+  let changed = false;
+  for (const p of Object.keys(map)) {
+    if (p === path || p.startsWith(path.endsWith("/") ? path : path + "/")) {
+      delete map[p];
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveFileTags(map);
+    renderSidebar();
+  }
+}
+
+function updateTagsOnView(): void {
+  const isLight = document.documentElement.dataset.theme === "light";
+  document.querySelectorAll<HTMLTableRowElement>("tbody tr").forEach((tr) => {
+    const path = tr.dataset.path;
+    if (!path) return;
+    const existing = tr.querySelector(".file-tags");
+    if (existing) existing.remove();
+    const tags = getTagsForPath(path);
+    if (tags.length > 0) {
+      const nameRow = tr.querySelector(".file-name-row");
+      if (nameRow) {
+        const span = document.createElement("span");
+        span.className = "file-tags";
+        for (const t of tags) {
+          const def = TAG_DEFS[t];
+          const dot = document.createElement("span");
+          dot.className = "file-tag-dot";
+          dot.style.backgroundColor = isLight ? def.lightColor : def.color;
+          dot.title = `Tag: ${def.label}`;
+          span.appendChild(dot);
+        }
+        nameRow.appendChild(span);
+      }
+    }
+  });
+
+  document.querySelectorAll<HTMLElement>(".tile").forEach((tile) => {
+    const path = tile.dataset.path;
+    if (!path) return;
+    const existing = tile.querySelector(".tile-tag-dots");
+    if (existing) existing.remove();
+    const tags = getTagsForPath(path);
+    if (tags.length > 0) {
+      const dotsWrap = document.createElement("span");
+      dotsWrap.className = "tile-tag-dots";
+      for (const t of tags) {
+        const def = TAG_DEFS[t];
+        const dot = document.createElement("span");
+        dot.className = "tile-tag-dot";
+        dot.style.backgroundColor = isLight ? def.lightColor : def.color;
+        dot.title = `Tag: ${def.label}`;
+        dotsWrap.appendChild(dot);
+      }
+      tile.appendChild(dotsWrap);
+    }
+  });
+}
+
+async function openTagView(tag: TagKey): Promise<void> {
+  state.isTrash = false;
+  state.tag = tag;
+  state.path = `tag://${tag}`;
+  state.selection.clear();
+  ($("search") as HTMLInputElement).value = "";
+  await loadDir();
+  updateNavButtons();
+  updateTrashNav();
+}
+
 function renderTabs(): void {
   const bar = $("tab-bar");
   bar.innerHTML = "";
@@ -757,6 +1024,7 @@ async function switchTab(i: number): Promise<void> {
   renderTabs();
   await loadDir();
   updateNavButtons();
+  updateTrashNav();
 }
 
 /** New tab at `path` (default: the current folder), inheriting view/sort. */
@@ -771,6 +1039,7 @@ function newTab(path = state.path): void {
     sortKey: src.sortKey,
     sortDir: src.sortDir,
     isTrash: false,
+    tag: null,
     zoom: src.zoom,
     groupBy: src.groupBy,
   });
@@ -782,6 +1051,7 @@ async function closeTab(i: number): Promise<void> {
     // Last tab: replace it with a fresh one at Home instead of closing the window.
     const t = state.tabs[0];
     t.isTrash = false;
+    t.tag = null;
     t.path = state.homeDir;
     t.history = [state.homeDir];
     t.histIndex = 0;
@@ -798,6 +1068,7 @@ async function closeTab(i: number): Promise<void> {
     sortKey: gone.sortKey,
     sortDir: gone.sortDir,
     isTrash: gone.isTrash,
+    tag: gone.tag,
     zoom: gone.zoom,
     groupBy: gone.groupBy,
   });
@@ -837,6 +1108,7 @@ async function reopenClosedTab(): Promise<void> {
     sortKey: t.sortKey,
     sortDir: t.sortDir,
     isTrash: t.isTrash,
+    tag: t.tag,
     zoom: t.zoom,
     groupBy: t.groupBy,
   });
@@ -861,6 +1133,7 @@ function setActivePane(i: number): void {
   contentBtn.classList.toggle("is-active", state.contentMode);
   render();
   updateNavButtons();
+  void loadGitInfo();
 }
 
 let secondPaneBuilt = false;
@@ -1011,6 +1284,7 @@ async function openTrash(): Promise<void> {
   ($("search") as HTMLInputElement).value = "";
   await loadDir();
   updateNavButtons();
+  updateTrashNav();
 }
 
 async function doRestore(): Promise<void> {
@@ -1034,6 +1308,7 @@ async function doDeletePermanent(): Promise<void> {
   ($("dlg-delete") as HTMLDialogElement).close();
   try {
     const n = await invoke<number>("delete_trash", { paths });
+    for (const p of paths) removePathFromTags(p);
     state.selection.clear();
     toast(`${n} item${n === 1 ? "" : "s"} permanently deleted`);
     await loadDir();
@@ -1241,6 +1516,14 @@ function makeGroupHeadDiv(p: Pane, g: Group): HTMLDivElement {
 function renderCrumbs(): void {
   const nav = $("crumbs");
   nav.innerHTML = "";
+  if (state.tag) {
+    const tagDef = TAG_DEFS[state.tag];
+    const isLight = document.documentElement.dataset.theme === "light";
+    const col = isLight ? tagDef.lightColor : tagDef.color;
+    nav.innerHTML = `<span class="crumb">Tags</span><span class="crumb-sep">/</span><span class="crumb is-current" style="display:inline-flex;align-items:center;gap:5px;"><span class="nav-tag-dot" style="background:${col}"></span>${escapeHtml(tagDef.label)}</span>`;
+    $("side-path").textContent = `Tag: ${tagDef.label}`;
+    return;
+  }
   if (state.isTrash) {
     const b = document.createElement("span");
     b.className = "crumb";
@@ -1273,6 +1556,143 @@ function renderCrumbs(): void {
   $("side-path").textContent = state.path;
 }
 
+function getGitStatusFor(path: string, isDir: boolean): string | null {
+  if (!state.gitInfo) return null;
+  return state.gitInfo.statuses[path] || (isDir ? state.gitInfo.dir_statuses[path] : null) || null;
+}
+
+function gitTagClass(st: string): string {
+  switch (st) {
+    case "?": return "git-tag-untracked";
+    case "A": return "git-tag-added";
+    case "D": return "git-tag-deleted";
+    case "R": return "git-tag-renamed";
+    case "U": return "git-tag-conflict";
+    default: return "git-tag-modified";
+  }
+}
+
+function gitTagText(st: string): string {
+  switch (st) {
+    case "?": return "U";
+    case "A": return "A";
+    case "D": return "D";
+    case "R": return "R";
+    case "U": return "!";
+    default: return "M";
+  }
+}
+
+function gitDotClass(st: string): string {
+  switch (st) {
+    case "?": return "is-untracked";
+    case "A": return "is-added";
+    default: return "is-modified";
+  }
+}
+
+function gitTitleFor(st: string): string {
+  switch (st) {
+    case "?": return "Untracked (new file)";
+    case "A": return "Staged (added to git)";
+    case "D": return "Deleted in working tree";
+    case "R": return "Renamed in working tree";
+    case "U": return "Merge conflict";
+    default: return "Modified in git";
+  }
+}
+
+function gitBadgeForStatus(st: string): string {
+  return `<span class="git-tag ${gitTagClass(st)}" title="${escapeHtml(gitTitleFor(st))}">${gitTagText(st)}</span>`;
+}
+
+async function loadGitInfo(): Promise<void> {
+  const currentPath = state.path;
+  const badge = $("git-badge");
+  if (state.isTrash || state.tag) {
+    state.gitInfo = null;
+    if (badge) badge.hidden = true;
+    return;
+  }
+  try {
+    const info = await invoke<GitRepoInfo | null>("get_git_info", { path: currentPath });
+    if (state.path !== currentPath) return;
+    state.gitInfo = info;
+    updateGitBadge();
+    updateGitTagsOnView();
+  } catch (err) {
+    console.error("Failed to fetch git info:", err);
+    state.gitInfo = null;
+    if (badge) badge.hidden = true;
+  }
+}
+
+function updateGitBadge(): void {
+  const badge = $("git-badge");
+  if (!badge) return;
+  const info = state.gitInfo;
+  if (!info) {
+    badge.hidden = true;
+    return;
+  }
+  badge.hidden = false;
+  const branchEl = $("git-branch");
+  const dotEl = $("git-status-dot");
+  const syncEl = $("git-ahead-behind");
+
+  if (branchEl) branchEl.textContent = info.branch;
+  if (dotEl) {
+    dotEl.classList.toggle("is-dirty", !info.is_clean);
+    dotEl.title = info.is_clean ? "Working tree clean" : "Uncommitted changes";
+  }
+  if (syncEl) {
+    const parts: string[] = [];
+    if (info.ahead > 0) parts.push(`↑${info.ahead}`);
+    if (info.behind > 0) parts.push(`↓${info.behind}`);
+    syncEl.textContent = parts.join(" ");
+  }
+
+  const modifiedCount = Object.keys(info.statuses).length;
+  badge.title = `Git: ${info.branch} · ${info.is_clean ? "Clean" : `${modifiedCount} modified file${modifiedCount > 1 ? "s" : ""}`}${info.ahead ? ` · ${info.ahead} ahead` : ""}${info.behind ? ` · ${info.behind} behind` : ""}\nClick to copy branch, right-click for options`;
+}
+
+function updateGitTagsOnView(): void {
+  const suf = paneSuffix();
+  document.querySelectorAll<HTMLTableRowElement>(`#file-body${suf} tr`).forEach((tr) => {
+    const path = tr.dataset.path;
+    if (!path) return;
+    const isDir = tr.querySelector(".file-icon.is-dir") !== null;
+    const gitSt = getGitStatusFor(path, isDir);
+    const existing = tr.querySelector(".git-tag");
+    if (existing) existing.remove();
+    if (gitSt) {
+      const nameRow = tr.querySelector(".file-name-row");
+      if (nameRow) {
+        const span = document.createElement("span");
+        span.className = "git-tag " + gitTagClass(gitSt);
+        span.title = gitTitleFor(gitSt);
+        span.textContent = gitTagText(gitSt);
+        nameRow.appendChild(span);
+      }
+    }
+  });
+
+  document.querySelectorAll<HTMLElement>(`#grid-wrap${suf} .tile`).forEach((tile) => {
+    const path = tile.dataset.path;
+    if (!path) return;
+    const isDir = tile.querySelector(".tile-icon.is-dir") !== null;
+    const gitSt = getGitStatusFor(path, isDir);
+    const existing = tile.querySelector(".tile-git-dot");
+    if (existing) existing.remove();
+    if (gitSt) {
+      const dot = document.createElement("span");
+      dot.className = "tile-git-dot " + gitDotClass(gitSt);
+      dot.title = gitTitleFor(gitSt);
+      tile.appendChild(dot);
+    }
+  });
+}
+
 function makeEntryRow(p: Pane, e: Entry): HTMLTableRowElement {
   const tr = document.createElement("tr");
   tr.dataset.path = e.path;
@@ -1295,6 +1715,9 @@ function makeEntryRow(p: Pane, e: Entry): HTMLTableRowElement {
     // Identical names in different folders need their parent shown.
     const parent = parentOf(e.path) ?? "/";
     sub = `<span class="file-sub" title="${escapeHtml(parent)}">${escapeHtml(parent)}</span>`;
+  } else if (p.tabs[p.activeTab]?.tag) {
+    const parent = parentOf(e.path) ?? "/";
+    sub = `<span class="file-sub" title="${escapeHtml(parent)}">${escapeHtml(parent)}</span>`;
   } else if (p.compareRows) {
     const row = p.compareRows.find((r) => r.entry.path === e.path);
     const label =
@@ -1310,7 +1733,19 @@ function makeEntryRow(p: Pane, e: Entry): HTMLTableRowElement {
   // Putting it on the td itself turns the cell into a flex box, and
   // WebKitGTK then drops that cell's collapsed bottom border, so the row
   // dividers looked cut under the Name column.
-  nameTd.innerHTML = `<div class="cell-name">${iconSvg(iconFor(e), "icon file-icon" + (e.is_dir ? " is-dir" : ""))}<div class="cell-name-text"><span class="file-name">${escapeHtml(e.name)}</span>${sub}</div></div>`;
+  const kind = filterKindGroup(e);
+  const gitSt = getGitStatusFor(e.path, e.is_dir);
+  const gitBadgeHtml = gitSt ? gitBadgeForStatus(gitSt) : "";
+  const entryTags = getTagsForPath(e.path);
+  const isLight = document.documentElement.dataset.theme === "light";
+  const tagDotsHtml = entryTags.length > 0
+    ? `<span class="file-tags">${entryTags.map((t) => {
+        const def = TAG_DEFS[t];
+        const col = isLight ? def.lightColor : def.color;
+        return `<span class="file-tag-dot" style="background:${col}" title="Tag: ${def.label}"></span>`;
+      }).join("")}</span>`
+    : "";
+  nameTd.innerHTML = `<div class="cell-name">${iconSvg(iconFor(e), "icon file-icon" + (e.is_dir ? " is-dir" : "") + " kind-" + kind)}<div class="cell-name-text"><div class="file-name-row"><span class="file-name">${escapeHtml(e.name)}</span>${gitBadgeHtml}${tagDotsHtml}</div>${sub}</div></div>`;
   const modTd = document.createElement("td");
   modTd.textContent = fmtDate(e.modified);
   const typeTd = document.createElement("td");
@@ -1480,9 +1915,10 @@ function makeTile(p: Pane, e: Entry): HTMLButtonElement {
   // drops its <img> and the icon shows through. SVG loads directly (the
   // Rust thumbnailer has no SVG decoder); other images and video get a
   // cached thumbnail, started lazily when the tile becomes visible.
+  const kind = filterKindGroup(e);
   const iconWrap = document.createElement("span");
   iconWrap.className = "tile-thumb-wrap";
-  iconWrap.innerHTML = iconSvg(iconFor(e), "icon tile-icon" + (e.is_dir ? " is-dir" : ""));
+  iconWrap.innerHTML = iconSvg(iconFor(e), "icon tile-icon" + (e.is_dir ? " is-dir" : "") + " kind-" + kind);
   if (isImageEntry(e) && e.extension === "svg") {
     const img = document.createElement("img");
     img.className = "tile-thumb";
@@ -1499,6 +1935,28 @@ function makeTile(p: Pane, e: Entry): HTMLButtonElement {
   nameEl.className = "tile-name";
   nameEl.textContent = e.name;
   tile.append(iconWrap, nameEl);
+  const gitSt = getGitStatusFor(e.path, e.is_dir);
+  if (gitSt) {
+    const dot = document.createElement("span");
+    dot.className = "tile-git-dot " + gitDotClass(gitSt);
+    dot.title = gitTitleFor(gitSt);
+    tile.appendChild(dot);
+  }
+  const entryTags = getTagsForPath(e.path);
+  if (entryTags.length > 0) {
+    const dotsWrap = document.createElement("span");
+    dotsWrap.className = "tile-tag-dots";
+    const isLight = document.documentElement.dataset.theme === "light";
+    for (const t of entryTags) {
+      const def = TAG_DEFS[t];
+      const dot = document.createElement("span");
+      dot.className = "tile-tag-dot";
+      dot.style.backgroundColor = isLight ? def.lightColor : def.color;
+      dot.title = `Tag: ${def.label}`;
+      dotsWrap.appendChild(dot);
+    }
+    tile.appendChild(dotsWrap);
+  }
   if (pIsTrash && e.original_path) tile.title = e.original_path;
   tile.addEventListener("click", (ev) => onRowClick(ev, e));
   tile.addEventListener("dblclick", (ev) => {
@@ -1760,7 +2218,7 @@ function renderSelection(): void {
   for (const id of ["act-cut", "act-copy", "act-rename", "act-delete", "act-props"]) {
     ($ (id) as HTMLButtonElement).disabled = !has;
   }
-  ($("act-rename") as HTMLButtonElement).disabled = n !== 1;
+  ($("act-rename") as HTMLButtonElement).disabled = n === 0;
   ($("act-props") as HTMLButtonElement).disabled = n !== 1;
   ($("act-paste") as HTMLButtonElement).disabled = state.clipboard === null;
   if (n === 0) {
@@ -2019,14 +2477,23 @@ async function loadDirFor(paneIdx: number): Promise<void> {
   showStateFor("loading", paneIdx);
   try {
     const tab = p.tabs[p.activeTab];
-    const entries = tab?.isTrash
-      ? await invoke<Entry[]>("list_trash")
-      : await invoke<Entry[]>("list_dir", { path: tab?.path ?? "" });
+    let entries: Entry[] = [];
+    if (tab?.tag) {
+      const paths = getPathsForTag(tab.tag);
+      entries = paths.length > 0 ? await invoke<Entry[]>("get_entries", { paths }) : [];
+    } else if (tab?.isTrash) {
+      entries = await invoke<Entry[]>("list_trash");
+    } else {
+      entries = await invoke<Entry[]>("list_dir", { path: tab?.path ?? "" });
+    }
     p.entries = entries;
     render();
     showStateFor(p.filtered.length === 0 ? "empty" : "full", paneIdx);
     renderStatus();
     void requestFolderSizesFor(paneIdx);
+    if (paneIdx === state.activePane) {
+      void loadGitInfo();
+    }
   } catch (err) {
     $(`error-text${suf}`).textContent = String(err);
     showStateFor("error", paneIdx);
@@ -2220,14 +2687,38 @@ async function doOpenWith(e: Entry, app: AppInfo, always = false): Promise<void>
 
 /* ---- Batch rename ---- */
 
+type BatchTab = "replace" | "prefix_suffix" | "number" | "case" | "clean";
+let currentBatchTab: BatchTab = "replace";
+
 type BatchOpts = {
+  tab: BatchTab;
+  // Replace
   find: string;
   replace: string;
+  matchCase: boolean;
+  isRegex: boolean;
+  replaceAll: boolean;
+  includeExt: boolean;
+  // Prefix / Suffix
   prefix: string;
   suffix: string;
-  number: boolean;
+  // Numbering
+  numBase: string;
+  numPos: "suffix" | "prefix" | "replace";
+  numSep: string;
   start: number;
+  step: number;
   pad: number;
+  // Case
+  caseStyle: "lower" | "upper" | "title" | "sentence" | "camel" | "kebab" | "snake";
+  caseScope: "name" | "ext" | "both";
+  // Clean
+  cleanSpaces: "dash" | "underscore" | "remove" | "keep";
+  cleanSymbols: boolean;
+  cleanNumbers: boolean;
+  cleanTrim: boolean;
+  // Global secondary case
+  globalCase: "none" | "lower" | "upper" | "title" | "kebab" | "snake";
 };
 
 function splitStem(name: string): [string, string] {
@@ -2236,24 +2727,164 @@ function splitStem(name: string): [string, string] {
   return [name.slice(0, i), name.slice(i)];
 }
 
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function applyCase(s: string, style: string): string {
+  if (!s) return "";
+  switch (style) {
+    case "lower":
+      return s.toLowerCase();
+    case "upper":
+      return s.toUpperCase();
+    case "title":
+      return s.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.slice(1).toLowerCase());
+    case "sentence":
+      return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+    case "camel":
+      return s
+        .replace(/[-_\s]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ""))
+        .replace(/^(.)/, (c) => c.toLowerCase());
+    case "kebab":
+      return s
+        .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+        .replace(/[-_\s]+/g, "-")
+        .toLowerCase();
+    case "snake":
+      return s
+        .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+        .replace(/[-_\s]+/g, "_")
+        .toLowerCase();
+    default:
+      return s;
+  }
+}
+
 function batchNewName(name: string, o: BatchOpts, i: number): string {
   const [stem, ext] = splitStem(name);
-  let s = stem;
-  if (o.find) s = s.split(o.find).join(o.replace);
-  if (o.number) s = `${String(o.start + i).padStart(o.pad, "0")} ${s}`;
-  return o.prefix + s + o.suffix + ext;
+  let nextStem = stem;
+  let nextExt = ext;
+
+  if (o.tab === "replace") {
+    if (o.find) {
+      const target = o.includeExt ? name : stem;
+      let replaced = target;
+      try {
+        if (o.isRegex) {
+          const flags = (o.matchCase ? "" : "i") + (o.replaceAll ? "g" : "");
+          const re = new RegExp(o.find, flags);
+          replaced = target.replace(re, o.replace);
+        } else {
+          if (o.replaceAll) {
+            if (o.matchCase) {
+              replaced = target.split(o.find).join(o.replace);
+            } else {
+              replaced = target.replace(new RegExp(escapeRegex(o.find), "gi"), o.replace);
+            }
+          } else {
+            if (o.matchCase) {
+              replaced = target.replace(o.find, o.replace);
+            } else {
+              replaced = target.replace(new RegExp(escapeRegex(o.find), "i"), o.replace);
+            }
+          }
+        }
+      } catch {
+        // Invalid regex during input — retain original target
+      }
+      if (o.includeExt) return replaced;
+      nextStem = replaced;
+    }
+  } else if (o.tab === "prefix_suffix") {
+    nextStem = o.prefix + stem + o.suffix;
+  } else if (o.tab === "number") {
+    const num = String(o.start + i * o.step).padStart(o.pad, "0");
+    const base = o.numBase.trim() || stem;
+    if (o.numPos === "prefix") {
+      nextStem = base ? `${num}${o.numSep}${base}` : num;
+    } else if (o.numPos === "suffix") {
+      nextStem = base ? `${base}${o.numSep}${num}` : num;
+    } else {
+      nextStem = o.numBase.trim() ? `${o.numBase.trim()}${o.numSep}${num}` : num;
+    }
+  } else if (o.tab === "case") {
+    if (o.caseScope === "name" || o.caseScope === "both") {
+      nextStem = applyCase(stem, o.caseStyle);
+    }
+    if (o.caseScope === "ext" || o.caseScope === "both") {
+      nextExt = ext ? "." + applyCase(ext.slice(1), o.caseStyle) : "";
+    }
+  } else if (o.tab === "clean") {
+    let s = stem;
+    if (o.cleanSpaces === "dash") s = s.replace(/\s+/g, "-");
+    else if (o.cleanSpaces === "underscore") s = s.replace(/\s+/g, "_");
+    else if (o.cleanSpaces === "remove") s = s.replace(/\s+/g, "");
+
+    if (o.cleanSymbols) s = s.replace(/[^\w\s-]/g, "");
+    if (o.cleanNumbers) s = s.replace(/[0-9]+/g, "");
+    if (o.cleanTrim) s = s.trim();
+    nextStem = s;
+  }
+
+  if (o.globalCase !== "none") {
+    nextStem = applyCase(nextStem, o.globalCase);
+  }
+
+  return nextStem + nextExt;
 }
 
 function batchOpts(): BatchOpts {
-  return {
-    find: ($("batch-find") as HTMLInputElement).value,
-    replace: ($("batch-replace") as HTMLInputElement).value,
-    prefix: ($("batch-prefix") as HTMLInputElement).value,
-    suffix: ($("batch-suffix") as HTMLInputElement).value,
-    number: ($("batch-number") as HTMLInputElement).checked,
-    start: Number(($("batch-num-start") as HTMLInputElement).value) || 0,
-    pad: Math.max(1, Math.min(6, Number(($("batch-num-pad") as HTMLInputElement).value) || 2)),
+  const getVal = (id: string) => {
+    const el = $(id) as HTMLInputElement | HTMLSelectElement | null;
+    return el ? el.value : "";
   };
+  const getChecked = (id: string) => {
+    const el = $(id) as HTMLInputElement | null;
+    return el ? el.checked : false;
+  };
+  const getNum = (id: string, fallback: number) => {
+    const el = $(id) as HTMLInputElement | null;
+    const v = Number(el?.value);
+    return Number.isFinite(v) ? v : fallback;
+  };
+
+  return {
+    tab: currentBatchTab,
+    find: getVal("batch-find"),
+    replace: getVal("batch-replace"),
+    matchCase: getChecked("batch-match-case"),
+    isRegex: getChecked("batch-regex"),
+    replaceAll: getChecked("batch-replace-all"),
+    includeExt: getChecked("batch-include-ext"),
+    prefix: getVal("batch-prefix"),
+    suffix: getVal("batch-suffix"),
+    numBase: getVal("batch-num-base"),
+    numPos: (getVal("batch-num-pos") as any) || "suffix",
+    numSep: getVal("batch-num-sep"),
+    start: getNum("batch-num-start", 1),
+    step: Math.max(1, getNum("batch-num-step", 1)),
+    pad: Math.max(1, Math.min(6, getNum("batch-num-pad", 2))),
+    caseStyle: (getVal("batch-case-style") as any) || "lower",
+    caseScope: (getVal("batch-case-scope") as any) || "name",
+    cleanSpaces: (getVal("batch-clean-spaces") as any) || "dash",
+    cleanSymbols: getChecked("batch-clean-symbols"),
+    cleanNumbers: getChecked("batch-clean-numbers"),
+    cleanTrim: getChecked("batch-clean-trim"),
+    globalCase: (getVal("batch-global-case") as any) || "none",
+  };
+}
+
+function switchBatchTab(tab: BatchTab): void {
+  currentBatchTab = tab;
+  document.querySelectorAll(".batch-tab-btn").forEach((btn) => {
+    btn.classList.toggle("is-active", (btn as HTMLElement).dataset.batchTab === tab);
+  });
+  for (const t of ["replace", "prefix_suffix", "number", "case", "clean"] as BatchTab[]) {
+    const panel = $(`batch-panel-${t}`);
+    if (panel) panel.hidden = t !== tab;
+  }
+  updateBatchPreview();
 }
 
 /** Live preview + collision check. Returns false when Apply must stay disabled. */
@@ -2264,29 +2895,47 @@ function updateBatchPreview(): boolean {
   preview.innerHTML = "";
   const seen = new Set<string>();
   let ok = true;
-  items.slice(0, 8).forEach((e, i) => {
+  let changedCount = 0;
+  let collisionCount = 0;
+
+  for (let i = 0; i < items.length; i++) {
+    const e = items[i];
     const next = batchNewName(e.name, o, i);
+    const isChanged = next !== e.name;
+    if (isChanged) changedCount++;
+
+    const collision = next === "" || seen.has(next);
+    if (collision) {
+      ok = false;
+      collisionCount++;
+    }
+    seen.add(next);
+
     const line = document.createElement("div");
     line.className = "batch-line";
-    const collision = next === "" || seen.has(next);
-    if (collision) ok = false;
-    seen.add(next);
-    line.innerHTML = `<span>${escapeHtml(e.name)}</span> <span class="batch-arrow">→</span> <span class="${collision ? "batch-collision" : ""}">${escapeHtml(next || "(empty name)")}</span>`;
+    line.innerHTML = `
+      <span class="batch-line-before" title="${escapeHtml(e.name)}">${escapeHtml(e.name)}</span>
+      <span class="batch-line-arrow">→</span>
+      <span class="batch-line-after ${collision ? "is-collision" : isChanged ? "is-changed" : ""}" title="${escapeHtml(next || "(empty name)")}">
+        ${escapeHtml(next || "(empty name)")}
+      </span>
+    `;
     preview.appendChild(line);
-  });
-  if (items.length > 8) {
-    const more = document.createElement("div");
-    more.className = "batch-line";
-    more.textContent = `…and ${items.length - 8} more`;
-    preview.appendChild(more);
   }
+
+  const stats = $("batch-preview-stats");
+  if (stats) {
+    stats.textContent = `${changedCount} of ${items.length} will change${collisionCount > 0 ? ` · ⚠ ${collisionCount} collision${collisionCount > 1 ? "s" : ""}` : ""}`;
+  }
+
   const err = $("batch-error");
   if (!ok) {
-    err.textContent = "Two files would get the same name (or an empty name). Adjust the pattern.";
+    err.textContent = "Conflict detected: Two files would get the same name (or an empty name). Please adjust the settings.";
     err.hidden = false;
   } else {
     err.hidden = true;
   }
+
   ($("batch-confirm") as HTMLButtonElement).disabled = !ok || items.length === 0;
   return ok;
 }
@@ -2294,14 +2943,8 @@ function updateBatchPreview(): boolean {
 function askBatchRename(): void {
   const items = selectedEntries();
   if (items.length === 0) return;
-  ($("batch-count") as HTMLElement).textContent = `${items.length} item${items.length === 1 ? "" : "s"} selected`;
-  for (const id of ["batch-find", "batch-replace", "batch-prefix", "batch-suffix"]) {
-    ($ (id) as HTMLInputElement).value = "";
-  }
-  ($("batch-number") as HTMLInputElement).checked = false;
-  ($("batch-num-start") as HTMLInputElement).value = "1";
-  ($("batch-num-pad") as HTMLInputElement).value = "2";
-  ($("batch-error") as HTMLElement).hidden = true;
+  ($("batch-count") as HTMLElement).textContent = `${items.length} item${items.length === 1 ? "" : "s"} selected to rename`;
+  switchBatchTab(currentBatchTab);
   updateBatchPreview();
   ($("dlg-batch") as HTMLDialogElement).showModal();
 }
@@ -2311,8 +2954,6 @@ async function doBatchRename(): Promise<void> {
   if (items.length === 0) return;
   if (!updateBatchPreview()) return; // collision — dialog stays open
   const o = batchOpts();
-  // The confirm button preventDefaults the form submit (which would close
-  // the dialog), so dismiss it here: confirming ends the dialog's job.
   ($("dlg-batch") as HTMLDialogElement).close();
   let done = 0;
   let failed = 0;
@@ -2322,6 +2963,10 @@ async function doBatchRename(): Promise<void> {
     if (next === items[i].name) continue;
     try {
       await invoke("rename_path", { path: items[i].path, new_name: next });
+      const oldPath = items[i].path;
+      const parent = parentOf(oldPath) ?? "";
+      const newPath = parent ? `${parent.replace(/\/+$/, "")}/${next}` : next;
+      renamePathInTags(oldPath, newPath);
       done++;
     } catch (err) {
       failed++;
@@ -2331,6 +2976,668 @@ async function doBatchRename(): Promise<void> {
   if (failed === 0) toast(`${done} item${done === 1 ? "" : "s"} renamed`);
   else toast(`${done} renamed, ${failed} failed: ${firstErr}`, true);
   await loadDir();
+}
+
+/* ---- Visual Disk Space Analyzer (Treemap & Ranked Breakdown) ---- */
+
+interface SpaceChild {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  file_count: number;
+  dir_count: number;
+}
+
+interface DiskUsageReport {
+  path: string;
+  name: string;
+  total_size: number;
+  total_files: number;
+  total_dirs: number;
+  items: SpaceChild[];
+}
+
+interface TreemapTile {
+  item: SpaceChild;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  color: string;
+  pct: number;
+}
+
+const ANALYZER_PALETTE = [
+  "#3b82f6", // Electric Blue
+  "#8b5cf6", // Purple
+  "#10b981", // Emerald Green
+  "#f59e0b", // Amber
+  "#06b6d4", // Cyan
+  "#ec4899", // Rose / Pink
+  "#6366f1", // Indigo
+  "#14b8a6", // Teal
+  "#f97316", // Warm Orange
+  "#84cc16", // Lime
+  "#a855f7", // Violet
+  "#e11d48", // Crimson
+  "#0284c7", // Sky
+  "#059669", // Mint
+  "#d97706", // Gold
+];
+
+let analyzerCurrentPath: string = "";
+let analyzerReport: DiskUsageReport | null = null;
+let analyzerViewMode: "both" | "treemap" | "list" = "both";
+let analyzerIsScanning: boolean = false;
+let analyzerScanToken: number = 0;
+let analyzerResizeObserver: ResizeObserver | null = null;
+
+function setAnalyzerViewMode(mode: "both" | "treemap" | "list"): void {
+  analyzerViewMode = mode;
+  const content = $("analyzer-content");
+  if (content) {
+    content.className = `analyzer-content view-${mode}`;
+  }
+  $("analyzer-view-both")?.classList.toggle("is-active", mode === "both");
+  $("analyzer-view-treemap")?.classList.toggle("is-active", mode === "treemap");
+  $("analyzer-view-list")?.classList.toggle("is-active", mode === "list");
+
+  if (analyzerReport && (mode === "both" || mode === "treemap")) {
+    requestAnimationFrame(() => {
+      if (analyzerReport) renderTreemap(analyzerReport);
+    });
+  }
+}
+
+async function openDiskAnalyzer(path?: string): Promise<void> {
+  const target = path || state.path;
+  if (!target || state.isTrash) {
+    toast("Cannot analyze Trash virtual directory", true);
+    return;
+  }
+  const dlg = $("dlg-analyzer") as HTMLDialogElement;
+  if (!dlg.open) {
+    dlg.showModal();
+    if (!analyzerResizeObserver) {
+      const canvas = $("analyzer-treemap-canvas");
+      if (canvas && typeof ResizeObserver !== "undefined") {
+        analyzerResizeObserver = new ResizeObserver(() => {
+          if (analyzerReport && dlg.open && (analyzerViewMode === "both" || analyzerViewMode === "treemap")) {
+            renderTreemap(analyzerReport);
+          }
+        });
+        analyzerResizeObserver.observe(canvas);
+      }
+    }
+  }
+  await scanAnalyzerPath(target);
+}
+
+function closeDiskAnalyzer(): void {
+  const dlg = $("dlg-analyzer") as HTMLDialogElement;
+  if (dlg.open) dlg.close();
+  hideAnalyzerTooltip();
+  void invoke("cancel_analyze_space");
+}
+
+async function scanAnalyzerPath(target: string): Promise<void> {
+  analyzerCurrentPath = target;
+  analyzerIsScanning = true;
+  const currentToken = ++analyzerScanToken;
+
+  renderAnalyzerBreadcrumbs(target);
+
+  const loading = $("analyzer-loading");
+  const loadingSub = $("analyzer-loading-sub");
+  if (loading) loading.hidden = false;
+  if (loadingSub) loadingSub.textContent = target;
+  ($("analyzer-empty") as HTMLElement).hidden = true;
+
+  ($("analyzer-stat-size") as HTMLElement).textContent = "Scanning…";
+  ($("analyzer-stat-files") as HTMLElement).textContent = "—";
+  ($("analyzer-stat-dirs") as HTMLElement).textContent = "—";
+  ($("analyzer-stat-largest") as HTMLElement).textContent = "—";
+
+  try {
+    const report = await invoke<DiskUsageReport>("analyze_space", { path: target });
+    if (currentToken !== analyzerScanToken) return;
+
+    analyzerReport = report;
+    analyzerIsScanning = false;
+    if (loading) loading.hidden = true;
+
+    renderAnalyzerView(report);
+  } catch (err: any) {
+    if (currentToken !== analyzerScanToken) return;
+    analyzerIsScanning = false;
+    if (loading) loading.hidden = true;
+    const msg = String(err?.message || err || "Failed to analyze");
+    if (!msg.includes("cancelled")) {
+      toast(`Disk Analysis error: ${msg}`, true);
+    }
+  }
+}
+
+function renderAnalyzerBreadcrumbs(currPath: string): void {
+  const container = $("analyzer-crumbs");
+  if (!container) return;
+  container.innerHTML = "";
+
+  const segments = currPath.split("/").filter(Boolean);
+  let accumulated = "";
+
+  const rootBtn = document.createElement("button");
+  rootBtn.type = "button";
+  rootBtn.className = "analyzer-crumb-btn" + (currPath === "/" ? " is-current" : "");
+  rootBtn.textContent = "/";
+  rootBtn.title = "Root (/)";
+  rootBtn.addEventListener("click", () => void scanAnalyzerPath("/"));
+  container.appendChild(rootBtn);
+
+  for (let i = 0; i < segments.length; i++) {
+    accumulated += "/" + segments[i];
+    const targetPath = accumulated;
+
+    const sep = document.createElement("span");
+    sep.className = "analyzer-crumb-sep";
+    sep.textContent = "›";
+    container.appendChild(sep);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "analyzer-crumb-btn" + (i === segments.length - 1 ? " is-current" : "");
+    btn.textContent = segments[i];
+    btn.title = targetPath;
+    btn.addEventListener("click", () => void scanAnalyzerPath(targetPath));
+    container.appendChild(btn);
+  }
+
+  container.scrollLeft = container.scrollWidth;
+}
+
+function renderAnalyzerView(report: DiskUsageReport): void {
+  ($("analyzer-stat-size") as HTMLElement).textContent = fmtSize(report.total_size);
+  ($("analyzer-stat-files") as HTMLElement).textContent = `${report.total_files.toLocaleString()} files`;
+  ($("analyzer-stat-dirs") as HTMLElement).textContent = `${report.total_dirs.toLocaleString()} folders`;
+
+  const largest = report.items.length > 0 ? report.items[0] : null;
+  if (largest && report.total_size > 0) {
+    const pct = ((largest.size / report.total_size) * 100).toFixed(1);
+    ($("analyzer-stat-largest") as HTMLElement).textContent = `${largest.name} (${fmtSize(largest.size)} · ${pct}%)`;
+    ($("analyzer-stat-largest") as HTMLElement).title = `${largest.path} · ${fmtSize(largest.size)} (${pct}%)`;
+  } else {
+    ($("analyzer-stat-largest") as HTMLElement).textContent = "—";
+    ($("analyzer-stat-largest") as HTMLElement).title = "";
+  }
+
+  const emptyEl = $("analyzer-empty");
+  if (report.items.length === 0 || report.total_size === 0) {
+    if (emptyEl) emptyEl.hidden = false;
+    ($("analyzer-treemap-svg") as unknown as SVGElement).innerHTML = "";
+    ($("analyzer-table-body") as HTMLElement).innerHTML = "";
+    ($("analyzer-list-count") as HTMLElement).textContent = "0 items";
+    return;
+  }
+
+  if (emptyEl) emptyEl.hidden = true;
+
+  renderTreemap(report);
+  renderRankedList(report);
+}
+
+function computeSquarifiedTreemap(
+  items: SpaceChild[],
+  totalSize: number,
+  width: number,
+  height: number,
+  palette: string[]
+): TreemapTile[] {
+  if (items.length === 0 || totalSize <= 0 || width <= 0 || height <= 0) return [];
+
+  let activeItems: SpaceChild[] = [];
+  if (items.length > 32) {
+    activeItems = items.slice(0, 32);
+    let othersSize = 0;
+    let othersFiles = 0;
+    let othersDirs = 0;
+    for (let i = 32; i < items.length; i++) {
+      othersSize += items[i].size;
+      othersFiles += items[i].file_count;
+      othersDirs += items[i].dir_count;
+    }
+    if (othersSize > 0) {
+      activeItems.push({
+        name: `[${items.length - 32} other items]`,
+        path: "",
+        is_dir: false,
+        size: othersSize,
+        file_count: othersFiles,
+        dir_count: othersDirs,
+      });
+    }
+  } else {
+    activeItems = [...items];
+  }
+
+  const nonZero = activeItems.filter((it) => it.size > 0);
+  if (nonZero.length === 0) return [];
+
+  const nonZeroTotal = nonZero.reduce((acc, it) => acc + it.size, 0);
+  const totalArea = width * height;
+  const weights = nonZero.map((it) => (it.size / nonZeroTotal) * totalArea);
+
+  const tiles: TreemapTile[] = [];
+
+  let curX = 0;
+  let curY = 0;
+  let curW = width;
+  let curH = height;
+
+  let row: number[] = [];
+  let rowItems: SpaceChild[] = [];
+  let rowIndices: number[] = [];
+
+  function worst(rowAreas: number[], sideLength: number): number {
+    if (rowAreas.length === 0) return Infinity;
+    const s2 = sideLength * sideLength;
+    const sum = rowAreas.reduce((a, b) => a + b, 0);
+    const sum2 = sum * sum;
+    let max = -Infinity;
+    let min = Infinity;
+    for (const a of rowAreas) {
+      if (a > max) max = a;
+      if (a < min) min = a;
+    }
+    return Math.max((s2 * max) / sum2, sum2 / (s2 * min));
+  }
+
+  function layoutRow(rowAreas: number[], rowChildren: SpaceChild[], origIndices: number[]): void {
+    const sum = rowAreas.reduce((a, b) => a + b, 0);
+    if (sum <= 0) return;
+
+    if (curW <= curH) {
+      const rowHeight = sum / curW;
+      let offset = 0;
+      for (let i = 0; i < rowAreas.length; i++) {
+        const itemW = rowAreas[i] / rowHeight;
+        const it = rowChildren[i];
+        const origIdx = origIndices[i];
+        const pct = (it.size / totalSize) * 100;
+        const color = !it.path ? "#475569" : palette[origIdx % palette.length];
+        tiles.push({
+          item: it,
+          x: curX + offset,
+          y: curY,
+          w: itemW,
+          h: rowHeight,
+          color,
+          pct,
+        });
+        offset += itemW;
+      }
+      curY += rowHeight;
+      curH = Math.max(0, curH - rowHeight);
+    } else {
+      const rowWidth = sum / curH;
+      let offset = 0;
+      for (let i = 0; i < rowAreas.length; i++) {
+        const itemH = rowAreas[i] / rowWidth;
+        const it = rowChildren[i];
+        const origIdx = origIndices[i];
+        const pct = (it.size / totalSize) * 100;
+        const color = !it.path ? "#475569" : palette[origIdx % palette.length];
+        tiles.push({
+          item: it,
+          x: curX,
+          y: curY + offset,
+          w: rowWidth,
+          h: itemH,
+          color,
+          pct,
+        });
+        offset += itemH;
+      }
+      curX += rowWidth;
+      curW = Math.max(0, curW - rowWidth);
+    }
+  }
+
+  for (let i = 0; i < nonZero.length; i++) {
+    const area = weights[i];
+    const s = Math.min(curW, curH);
+    if (row.length === 0) {
+      row.push(area);
+      rowItems.push(nonZero[i]);
+      rowIndices.push(i);
+    } else {
+      const currentWorst = worst(row, s);
+      const testRow = [...row, area];
+      const newWorst = worst(testRow, s);
+      if (newWorst <= currentWorst) {
+        row.push(area);
+        rowItems.push(nonZero[i]);
+        rowIndices.push(i);
+      } else {
+        layoutRow(row, rowItems, rowIndices);
+        row = [area];
+        rowItems = [nonZero[i]];
+        rowIndices = [i];
+      }
+    }
+  }
+
+  if (row.length > 0) {
+    layoutRow(row, rowItems, rowIndices);
+  }
+
+  return tiles;
+}
+
+function renderTreemap(report: DiskUsageReport): void {
+  const canvas = $("analyzer-treemap-canvas");
+  const svg = $("analyzer-treemap-svg") as unknown as SVGSVGElement;
+  if (!canvas || !svg) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(rect.width - 16, 240);
+  const height = Math.max(rect.height - 16, 160);
+
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.innerHTML = "";
+
+  const tiles = computeSquarifiedTreemap(
+    report.items,
+    report.total_size,
+    width,
+    height,
+    ANALYZER_PALETTE
+  );
+
+  const pad = 2;
+
+  for (const t of tiles) {
+    const tileW = Math.max(t.w - pad * 2, 1);
+    const tileH = Math.max(t.h - pad * 2, 1);
+    const tileX = t.x + pad;
+    const tileY = t.y + pad;
+
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("class", "treemap-node");
+
+    const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    r.setAttribute("class", "treemap-rect");
+    r.setAttribute("x", tileX.toFixed(1));
+    r.setAttribute("y", tileY.toFixed(1));
+    r.setAttribute("width", tileW.toFixed(1));
+    r.setAttribute("height", tileH.toFixed(1));
+    r.setAttribute("rx", "4");
+    r.setAttribute("ry", "4");
+    r.setAttribute("fill", t.color);
+    g.appendChild(r);
+
+    if (tileW >= 48 && tileH >= 24) {
+      const textName = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      textName.setAttribute("class", "treemap-label-name");
+      textName.setAttribute("x", (tileX + 7).toFixed(1));
+      textName.setAttribute("y", (tileY + (tileH >= 44 ? 18 : tileH / 2 + 4)).toFixed(1));
+
+      const maxChars = Math.floor((tileW - 14) / 7.2);
+      const displayName = t.item.name.length > maxChars && maxChars > 3
+        ? t.item.name.slice(0, maxChars - 2) + "…"
+        : t.item.name;
+      textName.textContent = displayName;
+      g.appendChild(textName);
+
+      if (tileH >= 44 && tileW >= 60) {
+        const textSize = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        textSize.setAttribute("class", "treemap-label-size");
+        textSize.setAttribute("x", (tileX + 7).toFixed(1));
+        textSize.setAttribute("y", (tileY + 34).toFixed(1));
+        textSize.textContent = `${fmtSize(t.item.size)} (${t.pct.toFixed(1)}%)`;
+        g.appendChild(textSize);
+      }
+    }
+
+    g.addEventListener("mouseenter", (ev) => {
+      showAnalyzerTooltip(ev, t);
+    });
+    g.addEventListener("mousemove", (ev) => {
+      moveAnalyzerTooltip(ev);
+    });
+    g.addEventListener("mouseleave", () => {
+      hideAnalyzerTooltip();
+    });
+
+    g.addEventListener("click", () => {
+      if (t.item.is_dir && t.item.path) {
+        hideAnalyzerTooltip();
+        void scanAnalyzerPath(t.item.path);
+      }
+    });
+
+    g.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      if (!t.item.path) return;
+      showAnalyzerContextMenu(ev.clientX, ev.clientY, t.item);
+    });
+
+    svg.appendChild(g);
+  }
+}
+
+function showAnalyzerTooltip(ev: MouseEvent, tile: TreemapTile): void {
+  const tip = $("analyzer-tooltip");
+  if (!tip) return;
+  const isDir = tile.item.is_dir;
+  const countStr = isDir
+    ? `${tile.item.dir_count.toLocaleString()} folders, ${tile.item.file_count.toLocaleString()} files`
+    : "1 file";
+
+  tip.innerHTML = `
+    <div class="analyzer-tip-title">
+      <span style="color: ${tile.color}">${iconSvg(isDir ? ICONS.folder : iconForFileName(tile.item.name))}</span>
+      <span>${escapeHtml(tile.item.name)}</span>
+    </div>
+    <div class="analyzer-tip-meta">
+      <strong>${fmtSize(tile.item.size)}</strong>
+      <span>(${tile.pct.toFixed(1)}% of folder)</span>
+    </div>
+    <div class="analyzer-tip-details">${countStr}</div>
+    ${tile.item.path ? `<div class="analyzer-tip-details mono" style="font-size: 10px; opacity: 0.7;">${escapeHtml(tile.item.path)}</div>` : ""}
+    <div class="analyzer-tip-hint">${isDir ? "Click to drill down • Right-click for options" : "Right-click for options"}</div>
+  `;
+  tip.hidden = false;
+  moveAnalyzerTooltip(ev);
+}
+
+function moveAnalyzerTooltip(ev: MouseEvent): void {
+  const tip = $("analyzer-tooltip");
+  if (!tip || tip.hidden) return;
+  const pad = 14;
+  let x = ev.clientX + pad;
+  let y = ev.clientY + pad;
+  const tipRect = tip.getBoundingClientRect();
+  if (x + tipRect.width > window.innerWidth - 8) {
+    x = ev.clientX - tipRect.width - pad;
+  }
+  if (y + tipRect.height > window.innerHeight - 8) {
+    y = ev.clientY - tipRect.height - pad;
+  }
+  tip.style.left = `${Math.max(x, 8)}px`;
+  tip.style.top = `${Math.max(y, 8)}px`;
+}
+
+function hideAnalyzerTooltip(): void {
+  const tip = $("analyzer-tooltip");
+  if (tip) tip.hidden = true;
+}
+
+function renderRankedList(report: DiskUsageReport): void {
+  const tbody = $("analyzer-table-body");
+  const countEl = $("analyzer-list-count");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  if (countEl) {
+    countEl.textContent = `${report.items.length} items`;
+  }
+
+  const maxItemSize = report.items.length > 0 ? report.items[0].size : 1;
+
+  for (let i = 0; i < report.items.length; i++) {
+    const item = report.items[i];
+    const pct = report.total_size > 0 ? (item.size / report.total_size) * 100 : 0;
+    const barWidth = maxItemSize > 0 ? Math.max((item.size / maxItemSize) * 100, 1) : 0;
+    const color = ANALYZER_PALETTE[i % ANALYZER_PALETTE.length];
+
+    const tr = document.createElement("tr");
+    tr.className = "analyzer-row";
+    tr.title = item.is_dir ? "Click to drill down • Right-click for options" : "Right-click for options";
+
+    const tdRank = document.createElement("td");
+    tdRank.className = "analyzer-cell-rank";
+    tdRank.textContent = String(i + 1);
+    tr.appendChild(tdRank);
+
+    const tdName = document.createElement("td");
+    const nameWrap = document.createElement("div");
+    nameWrap.className = "analyzer-cell-name" + (item.is_dir ? " is-dir" : "");
+    const iconSvgStr = item.is_dir ? ICONS.folder : iconForFileName(item.name);
+    nameWrap.innerHTML = `<span class="analyzer-item-icon" style="color: ${item.is_dir ? "var(--color-file-folder, var(--color-accent))" : "var(--color-muted)"}">${iconSvg(iconSvgStr)}</span><span class="analyzer-cell-name-text">${escapeHtml(item.name)}</span>`;
+    tdName.appendChild(nameWrap);
+    tr.appendChild(tdName);
+
+    const tdUsage = document.createElement("td");
+    const usageBox = document.createElement("div");
+    usageBox.className = "analyzer-usage-box";
+    usageBox.innerHTML = `
+      <div class="analyzer-bar-track">
+        <div class="analyzer-bar-fill" style="width: ${barWidth.toFixed(1)}%; background: ${color}"></div>
+      </div>
+      <span class="analyzer-pct-text">${pct.toFixed(1)}%</span>
+    `;
+    tdUsage.appendChild(usageBox);
+    tr.appendChild(tdUsage);
+
+    const tdSize = document.createElement("td");
+    tdSize.className = "analyzer-cell-size num";
+    tdSize.textContent = fmtSize(item.size);
+    tr.appendChild(tdSize);
+
+    const tdItems = document.createElement("td");
+    tdItems.className = "analyzer-cell-items";
+    if (item.is_dir) {
+      const parts: string[] = [];
+      if (item.dir_count > 0) parts.push(`${item.dir_count} folder${item.dir_count > 1 ? "s" : ""}`);
+      if (item.file_count > 0) parts.push(`${item.file_count} file${item.file_count > 1 ? "s" : ""}`);
+      tdItems.textContent = parts.join(", ") || "empty";
+    } else {
+      tdItems.textContent = "1 file";
+    }
+    tr.appendChild(tdItems);
+
+    const tdActions = document.createElement("td");
+    const actWrap = document.createElement("div");
+    actWrap.className = "analyzer-actions-wrap";
+
+    // Reveal in FileMon
+    const btnReveal = document.createElement("button");
+    btnReveal.type = "button";
+    btnReveal.className = "analyzer-act-btn";
+    btnReveal.title = "Reveal in FileMon";
+    btnReveal.innerHTML = `<svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5"/></svg>`;
+    btnReveal.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      void revealInFileMon(item.path);
+    });
+    actWrap.appendChild(btnReveal);
+
+    // Terminal
+    const btnTerm = document.createElement("button");
+    btnTerm.type = "button";
+    btnTerm.className = "analyzer-act-btn";
+    btnTerm.title = "Open in Terminal";
+    btnTerm.innerHTML = `<svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 3.5h11a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/><path d="M5 6.5l2 1.5-2 1.5M9 9.5h2"/></svg>`;
+    btnTerm.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      void doOpenTerminal(item.is_dir ? item.path : (parentOf(item.path) || state.path));
+    });
+    actWrap.appendChild(btnTerm);
+
+    tdActions.appendChild(actWrap);
+    tr.appendChild(tdActions);
+
+    tr.addEventListener("click", () => {
+      if (item.is_dir && item.path) {
+        void scanAnalyzerPath(item.path);
+      }
+    });
+
+    tr.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      showAnalyzerContextMenu(ev.clientX, ev.clientY, item);
+    });
+
+    tbody.appendChild(tr);
+  }
+}
+
+function showAnalyzerContextMenu(x: number, y: number, item: SpaceChild): void {
+  if (!item.path) return;
+  const items: { label: string; action: () => void | Promise<void> }[] = [];
+  if (item.is_dir) {
+    items.push({
+      label: "Drill down into this folder",
+      action: () => void scanAnalyzerPath(item.path),
+    });
+  }
+  items.push({
+    label: "Reveal in FileMon",
+    action: () => void revealInFileMon(item.path),
+  });
+  items.push({
+    label: "Open in Terminal",
+    action: () => void doOpenTerminal(item.is_dir ? item.path : (parentOf(item.path) || state.path)),
+  });
+  items.push({
+    label: "Copy Path",
+    action: async () => {
+      try {
+        await navigator.clipboard.writeText(item.path);
+        toast("Path copied to clipboard");
+      } catch {
+        toast("Could not copy to clipboard", true);
+      }
+    },
+  });
+  items.push({
+    label: "Move to Trash",
+    action: async () => {
+      try {
+        await trashPaths([item.path]);
+        if (analyzerCurrentPath) void scanAnalyzerPath(analyzerCurrentPath);
+      } catch (e: any) {
+        toast(`Failed to trash: ${e?.message || e}`, true);
+      }
+    },
+  });
+  showMenuAt(x, y, items);
+}
+
+async function revealInFileMon(path: string): Promise<void> {
+  const dlg = $("dlg-analyzer") as HTMLDialogElement;
+  if (dlg.open) dlg.close();
+  hideAnalyzerTooltip();
+  const parent = parentOf(path);
+  if (parent) {
+    await navigate(parent);
+    state.selection.clear();
+    state.selection.add(path);
+    renderSelection();
+  } else {
+    await navigate(path);
+  }
 }
 
 /* ---- Duplicate finder ---- */
@@ -2517,8 +3824,12 @@ async function doRename(): Promise<void> {
   const items = selectedEntries();
   if (items.length !== 1) return;
   const name = ($("rename-input") as HTMLInputElement).value;
+  const oldPath = items[0].path;
   try {
-    await invoke("rename_path", { path: items[0].path, new_name: name });
+    await invoke("rename_path", { path: oldPath, new_name: name });
+    const parent = parentOf(oldPath) ?? "";
+    const newPath = parent ? `${parent.replace(/\/+$/, "")}/${name}` : name;
+    renamePathInTags(oldPath, newPath);
     ($("dlg-rename") as HTMLDialogElement).close();
     toast(`Renamed to ${name}`);
     await loadDir();
@@ -2739,6 +4050,41 @@ function highlightCodeLine(line: string, ext: string): string {
     return m;
   });
 }
+function renderPreviewTags(container: HTMLElement, path: string): void {
+  const section = document.createElement("div");
+  section.className = "preview-tags-section";
+
+  const title = document.createElement("div");
+  title.className = "preview-tags-title";
+  title.textContent = "Tags";
+  section.appendChild(title);
+
+  const pills = document.createElement("div");
+  pills.className = "preview-tags-pills";
+
+  const isLight = document.documentElement.dataset.theme === "light";
+  const activeTags = getTagsForPath(path);
+
+  for (const tagKey of ALL_TAGS) {
+    const def = TAG_DEFS[tagKey];
+    const isTagged = activeTags.includes(tagKey);
+    const col = isLight ? def.lightColor : def.color;
+
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "preview-tag-pill" + (isTagged ? " is-active" : "");
+    pill.innerHTML = `<span class="file-tag-dot" style="background:${col}"></span><span>${escapeHtml(def.label)}</span>`;
+    pill.title = isTagged ? `Remove ${def.label} tag` : `Add ${def.label} tag`;
+    pill.addEventListener("click", () => {
+      toggleTagForPaths([path], tagKey);
+    });
+    pills.appendChild(pill);
+  }
+
+  section.appendChild(pills);
+  container.appendChild(section);
+}
+
 async function updatePreview(): Promise<void> {
   if (!state.previewOpen) return;
   // A newer preview supersedes this one: the folder/text branches await a
@@ -2754,6 +4100,9 @@ async function updatePreview(): Promise<void> {
     return;
   }
   const e = items[0];
+  const finish = () => {
+    if (!state.isTrash) renderPreviewTags(body, e.path);
+  };
   $("preview-title").textContent = e.name;
   if (e.is_dir) {
     try {
@@ -2764,6 +4113,7 @@ async function updatePreview(): Promise<void> {
       if (gen !== previewGen) return;
       body.innerHTML = `<p class="preview-note">Folder</p>`;
     }
+    finish();
     return;
   }
   if (e.extension && IMAGE_EXTS.has(e.extension)) {
@@ -2791,6 +4141,7 @@ async function updatePreview(): Promise<void> {
     wrap.append(img, caption);
     body.innerHTML = "";
     body.appendChild(wrap);
+    finish();
     return;
   }
   if (e.extension === "pdf") {
@@ -2798,6 +4149,7 @@ async function updatePreview(): Promise<void> {
     // stops doing so the fallback button still opens the file's app.
     body.innerHTML = "";
     body.appendChild(makePdfPreview(e));
+    finish();
     return;
   }
   if (e.extension && ARCHIVE_EXTS.has(e.extension)) {
@@ -2806,6 +4158,7 @@ async function updatePreview(): Promise<void> {
       if (gen !== previewGen) return;
       body.innerHTML = "";
       body.appendChild(makeArchivePreview(e, entries));
+      finish();
       return;
     } catch {
       /* not a readable archive — fall through to summary */
@@ -2820,6 +4173,7 @@ async function updatePreview(): Promise<void> {
       div.innerHTML = renderMarkdown(text);
       body.innerHTML = "";
       body.appendChild(div);
+      finish();
       return;
     } catch {
       /* fall through to summary */
@@ -2833,12 +4187,14 @@ async function updatePreview(): Promise<void> {
       body.innerHTML = "";
       body.appendChild(pre);
       if (note) body.appendChild(note);
+      finish();
       return;
     } catch {
       /* fall through to summary */
     }
   }
   body.innerHTML = `<dl class="detail-grid"><div><dt>Type</dt><dd>${kindLabel(e)}</dd></div><div><dt>Size</dt><dd>${fmtSize(e.size ?? 0)}</dd></div><div><dt>Modified</dt><dd>${fmtDate(e.modified)}</dd></div></dl>`;
+  finish();
 }
 
 function setPreview(open: boolean): void {
@@ -3140,9 +4496,88 @@ async function renderQuickLook(): Promise<void> {
   body.innerHTML = `<dl class="detail-grid"><div><dt>Type</dt><dd>${kindLabel(e)}</dd></div><div><dt>Size</dt><dd>${fmtSize(e.size ?? 0)}</dd></div><div><dt>Modified</dt><dd>${fmtDate(e.modified)}</dd></div></dl>`;
 }
 
-/* ---- Appearance (density, interface scale, grid zoom, grouping) ---- */
+/* ---- Appearance (density, interface scale, grid zoom, grouping, accent) ---- */
 
 type Density = "comfortable" | "compact";
+type AccentName = "blue" | "emerald" | "violet" | "rose" | "amber" | "cyan" | "mono";
+
+const ACCENT_PRESETS: Record<
+  AccentName,
+  {
+    label: string;
+    dark: { accent: string; accent2: string; subtle: string; ring: string };
+    light: { accent: string; accent2: string; subtle: string; ring: string };
+  }
+> = {
+  blue: {
+    label: "Electric Blue",
+    dark: { accent: "#3b82f6", accent2: "#60a5fa", subtle: "rgba(59, 130, 246, 0.15)", ring: "rgba(59, 130, 246, 0.4)" },
+    light: { accent: "#2563eb", accent2: "#3b82f6", subtle: "rgba(37, 99, 235, 0.08)", ring: "rgba(37, 99, 235, 0.25)" },
+  },
+  emerald: {
+    label: "Emerald Green",
+    dark: { accent: "#10b981", accent2: "#34d399", subtle: "rgba(16, 185, 129, 0.15)", ring: "rgba(16, 185, 129, 0.4)" },
+    light: { accent: "#059669", accent2: "#10b981", subtle: "rgba(5, 150, 105, 0.08)", ring: "rgba(5, 150, 105, 0.25)" },
+  },
+  violet: {
+    label: "Cyber Violet",
+    dark: { accent: "#8b5cf6", accent2: "#a78bfa", subtle: "rgba(139, 92, 246, 0.15)", ring: "rgba(139, 92, 246, 0.4)" },
+    light: { accent: "#7c3aed", accent2: "#8b5cf6", subtle: "rgba(124, 58, 237, 0.08)", ring: "rgba(124, 58, 237, 0.25)" },
+  },
+  rose: {
+    label: "Crimson Rose",
+    dark: { accent: "#f43f5e", accent2: "#fb7185", subtle: "rgba(244, 63, 94, 0.15)", ring: "rgba(244, 63, 94, 0.4)" },
+    light: { accent: "#e11d48", accent2: "#f43f5e", subtle: "rgba(225, 29, 72, 0.08)", ring: "rgba(225, 29, 72, 0.25)" },
+  },
+  amber: {
+    label: "Amber Gold",
+    dark: { accent: "#f59e0b", accent2: "#fbbf24", subtle: "rgba(245, 158, 11, 0.15)", ring: "rgba(245, 158, 11, 0.4)" },
+    light: { accent: "#d97706", accent2: "#f59e0b", subtle: "rgba(217, 119, 6, 0.08)", ring: "rgba(217, 119, 6, 0.25)" },
+  },
+  cyan: {
+    label: "Cyan Teal",
+    dark: { accent: "#06b6d4", accent2: "#22d3ee", subtle: "rgba(6, 182, 212, 0.15)", ring: "rgba(6, 182, 212, 0.4)" },
+    light: { accent: "#0891b2", accent2: "#06b6d4", subtle: "rgba(8, 145, 178, 0.08)", ring: "rgba(8, 145, 178, 0.25)" },
+  },
+  mono: {
+    label: "Monochrome",
+    dark: { accent: "#e4e4e7", accent2: "#ffffff", subtle: "rgba(255, 255, 255, 0.12)", ring: "rgba(255, 255, 255, 0.3)" },
+    light: { accent: "#18181b", accent2: "#27272a", subtle: "rgba(24, 24, 27, 0.08)", ring: "rgba(24, 24, 27, 0.25)" },
+  },
+};
+
+function getAccentColor(): AccentName {
+  return (localStorage.getItem("filemon-accent") || "blue") as AccentName;
+}
+
+function applyAccentColor(a?: AccentName): void {
+  const win = window as unknown as { __applyAccent?: (acc: string) => void };
+  if (win.__applyAccent) {
+    win.__applyAccent(a || getAccentColor());
+    return;
+  }
+  const accent = a || getAccentColor();
+  const preset = ACCENT_PRESETS[accent] || ACCENT_PRESETS.blue;
+  const isLight = document.documentElement.dataset.theme === "light";
+  const colors = isLight ? preset.light : preset.dark;
+
+  const s = document.documentElement.style;
+  s.setProperty("--color-accent", colors.accent);
+  s.setProperty("--color-accent-2", colors.accent2);
+  s.setProperty("--color-accent-subtle", colors.subtle);
+  s.setProperty("--color-focus", colors.accent);
+  s.setProperty("--color-focus-ring", colors.ring);
+  s.setProperty("--color-file-folder", colors.accent);
+  s.setProperty("--color-accent-gradient", `linear-gradient(135deg, ${colors.accent} 0%, ${colors.accent2} 100%)`);
+  document.documentElement.dataset.accent = accent;
+}
+
+function setAccentColor(a: AccentName): void {
+  localStorage.setItem("filemon-accent", a);
+  applyAccentColor(a);
+  syncAppearancePanel();
+  toast(`Accent color set to ${ACCENT_PRESETS[a]?.label || a}`);
+}
 
 function applyDensity(): void {
   const d = (localStorage.getItem("filemon-density") || "comfortable") as Density;
@@ -3197,6 +4632,9 @@ function syncAppearancePanel(): void {
   });
   document.querySelectorAll("#appearance-panel [data-zoom]").forEach((b) => {
     b.classList.toggle("is-active", Number((b as HTMLElement).dataset.zoom) === state.zoom);
+  });
+  document.querySelectorAll("#appearance-panel [data-accent]").forEach((b) => {
+    b.classList.toggle("is-active", (b as HTMLElement).dataset.accent === getAccentColor());
   });
 }
 
@@ -3279,9 +4717,13 @@ function showMenuAt(
   x: number,
   y: number,
   items: { label: string; disabled?: boolean; action: () => void | Promise<void> }[],
+  topElement?: HTMLElement | null,
 ): void {
   const menu = $("ctx-menu");
   menu.innerHTML = "";
+  if (topElement) {
+    menu.appendChild(topElement);
+  }
   for (const item of items) {
     const b = document.createElement("button");
     b.type = "button";
@@ -3301,12 +4743,117 @@ function showMenuAt(
   menu.style.top = `${Math.min(y, window.innerHeight - rect.height - 8)}px`;
 }
 
+function makeContextMenuTagsBar(paths: string[]): HTMLElement | null {
+  if (paths.length === 0) return null;
+  const row = document.createElement("div");
+  row.className = "ctx-tags-row";
+
+  const label = document.createElement("span");
+  label.className = "ctx-tags-label";
+  label.textContent = "Tags";
+  row.appendChild(label);
+
+  const dotsWrap = document.createElement("div");
+  dotsWrap.className = "ctx-tags-dots";
+
+  const isLight = document.documentElement.dataset.theme === "light";
+  const map = loadFileTags();
+  let hasAnyTag = false;
+
+  for (const tagKey of ALL_TAGS) {
+    const def = TAG_DEFS[tagKey];
+    const col = isLight ? def.lightColor : def.color;
+    const isTagged = paths.every((p) => (map[p] || []).includes(tagKey));
+    if (paths.some((p) => (map[p] || []).includes(tagKey))) {
+      hasAnyTag = true;
+    }
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ctx-tag-btn" + (isTagged ? " is-active" : "");
+    btn.style.backgroundColor = col;
+    btn.style.color = col;
+    btn.title = `Tag: ${def.label}` + (isTagged ? " (Click to remove)" : "");
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      toggleTagForPaths(paths, tagKey);
+      hideContextMenu();
+    });
+    dotsWrap.appendChild(btn);
+  }
+  row.appendChild(dotsWrap);
+
+  if (hasAnyTag) {
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.className = "ctx-tag-clear-btn";
+    clearBtn.title = "Clear all tags";
+    clearBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>`;
+    clearBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      clearTagsForPaths(paths);
+      hideContextMenu();
+    });
+    row.appendChild(clearBtn);
+  }
+
+  return row;
+}
+
 function showPinMenu(x: number, y: number, path: string): void {
   showMenuAt(x, y, [{ label: "Unpin from Quick access", action: () => togglePin(path) }]);
 }
 
+function showDriveMenu(x: number, y: number, d: Drive): void {
+  const isMounted = d.mounted !== false && !!d.mount;
+  const items: { label: string; disabled?: boolean; action: () => void | Promise<void> }[] = [];
+  if (isMounted) {
+    items.push({ label: "Open", action: () => void navigate(d.mount) });
+    items.push({ label: "Open in new tab", action: () => void openInNewTab(d.mount) });
+    items.push({ label: "Analyze Disk Space", action: () => void openDiskAnalyzer(d.mount) });
+    items.push({
+      label: "Copy mount path",
+      action: async () => {
+        try {
+          await navigator.clipboard.writeText(d.mount);
+          toast("Mount path copied");
+        } catch {
+          toast("Could not copy to clipboard", true);
+        }
+      },
+    });
+    const isSystemMount = d.mount === "/" || d.mount === "/boot" || d.mount === "/home";
+    if (!isSystemMount) {
+      items.push({ label: "Unmount", action: () => void unmountDrive(d) });
+    }
+  } else {
+    items.push({ label: "Mount and open", action: () => void mountDrive(d) });
+    if (d.device) {
+      items.push({
+        label: "Copy device path",
+        action: async () => {
+          try {
+            await navigator.clipboard.writeText(d.device!);
+            toast("Device path copied");
+          } catch {
+            toast("Could not copy to clipboard", true);
+          }
+        },
+      });
+    }
+  }
+  showMenuAt(x, y, items);
+}
+
 function showContextMenu(x: number, y: number, target: Entry | null): void {
   const items: { label: string; disabled?: boolean; action: () => void | Promise<void> }[] = [];
+  const selectedPaths = state.selection.size > 0
+    ? [...state.selection]
+    : target
+      ? [target.path]
+      : [];
+  const tagsBar = !state.isTrash && selectedPaths.length > 0 ? makeContextMenuTagsBar(selectedPaths) : null;
+
   if (state.isTrash) {
     if (target) {
       items.push({ label: "Restore", action: () => void doRestore() });
@@ -3315,9 +4862,26 @@ function showContextMenu(x: number, y: number, target: Entry | null): void {
       items.push({ label: "Empty Trash", disabled: state.entries.length === 0, action: askEmptyTrash });
     }
   } else if (target) {
+    if (state.tag) {
+      items.push({
+        label: "Reveal in Folder",
+        action: async () => {
+          const parent = parentOf(target.path);
+          if (parent) {
+            await navigate(parent);
+            state.selection.clear();
+            state.selection.add(target.path);
+            renderSelection();
+          }
+        },
+      });
+    }
     items.push({ label: "Open", action: () => void openEntry(target) });
     items.push({ label: "Quick Look", action: openQuickLook });
-    if (target.is_dir) items.push({ label: "Open in new tab", action: () => void openInNewTab(target.path) });
+    if (target.is_dir) {
+      items.push({ label: "Open in new tab", action: () => void openInNewTab(target.path) });
+      items.push({ label: "Analyze Disk Space", action: () => void openDiskAnalyzer(target.path) });
+    }
     items.push({
       label: "Open in Terminal",
       action: () =>
@@ -3342,12 +4906,17 @@ function showContextMenu(x: number, y: number, target: Entry | null): void {
     if (state.selection.size === 1 && (target.extension ?? "").toLowerCase() === "zip") {
       items.push({ label: "Extract here", action: () => void doExtract() });
     }
-    items.push({ label: "Rename", disabled: state.selection.size !== 1, action: askRename });
-    items.push({ label: "Batch rename…", action: askBatchRename });
+    if (state.selection.size > 1) {
+      items.push({ label: `Batch Rename (${state.selection.size} files, F2)…`, action: askBatchRename });
+    } else {
+      items.push({ label: "Rename (F2)", action: askRename });
+      items.push({ label: "Batch Rename…", action: askBatchRename });
+    }
     items.push({ label: "Delete", action: askDelete });
     items.push({ label: "Properties", disabled: state.selection.size !== 1, action: () => void showProperties() });
   } else {
     items.push({ label: "Open in Terminal", action: () => void doOpenTerminal(state.path) });
+    items.push({ label: "Analyze Disk Space", action: () => void openDiskAnalyzer(state.path) });
     items.push({ label: "Copy Path", action: () => void doCopyPath() });
     if (!isBuiltinPlace(state.path)) {
       items.push({
@@ -3359,7 +4928,7 @@ function showContextMenu(x: number, y: number, target: Entry | null): void {
     items.push({ label: "New file", action: () => askNew("file") });
     items.push({ label: "Paste", disabled: state.clipboard === null, action: () => void doPaste() });
   }
-  showMenuAt(x, y, items);
+  showMenuAt(x, y, items, tagsBar);
 }
 
 function hideContextMenu(): void {
@@ -3412,6 +4981,807 @@ function updateTrashNav(): void {
   document.querySelectorAll("#trash-list .nav-item").forEach((b) => {
     b.classList.toggle("is-active", state.isTrash);
   });
+  document.querySelectorAll("#tag-list .nav-item").forEach((b) => {
+    b.classList.toggle("is-active", (b as HTMLElement).dataset.tag === state.tag);
+  });
+  document.querySelectorAll("#quick-list .nav-item, #drive-list .nav-item").forEach((b) => {
+    const el = b as HTMLElement;
+    el.classList.toggle("is-active", !state.isTrash && !state.tag && !!el.dataset.path && el.dataset.path === state.path);
+  });
+}
+
+async function refreshDrives(): Promise<void> {
+  try {
+    state.drives = await invoke<Drive[]>("get_drives");
+    renderSidebar();
+  } catch (err) {
+    console.error("Failed to refresh drives:", err);
+  }
+}
+
+async function mountDrive(d: Drive): Promise<void> {
+  if (!d.device) {
+    toast("No device path for this drive", true);
+    return;
+  }
+  try {
+    toast(`Mounting ${d.name}...`);
+    const mountPath = await invoke<string>("mount_drive", { device: d.device });
+    toast(`Mounted ${d.name}`);
+    await refreshDrives();
+    if (mountPath) {
+      await navigate(mountPath);
+    }
+  } catch (err) {
+    toast(`Mount failed: ${err}`, true);
+  }
+}
+
+async function unmountDrive(d: Drive): Promise<void> {
+  const target = d.mount || d.device;
+  if (!target) {
+    toast("Cannot unmount: unknown target", true);
+    return;
+  }
+  try {
+    toast(`Unmounting ${d.name}...`);
+    await invoke("unmount_drive", { target });
+    toast(`Unmounted ${d.name}`);
+    if (d.mount && (state.path === d.mount || state.path.startsWith(d.mount + "/"))) {
+      await navigate(state.homeDir);
+    }
+    await refreshDrives();
+  } catch (err) {
+    toast(`Unmount failed: ${err}`, true);
+  }
+}
+
+function selectAll(): void {
+  state.selection.clear();
+  for (const e of state.filtered) {
+    state.selection.add(e.path);
+  }
+  renderSelection();
+}
+
+function invertSelection(): void {
+  const current = new Set(state.selection);
+  state.selection.clear();
+  for (const e of state.filtered) {
+    if (!current.has(e.path)) state.selection.add(e.path);
+  }
+  renderSelection();
+}
+
+function toggleHiddenFiles(): void {
+  state.showHidden = !state.showHidden;
+  ($("show-hidden") as HTMLInputElement).checked = state.showHidden;
+  localStorage.setItem("filemon-hidden", state.showHidden ? "1" : "0");
+  render();
+  showState(state.filtered.length === 0 ? "empty" : "full");
+}
+
+/* ==========================================================================
+   Command Palette & Quick Jump (Ctrl+K / Ctrl+P)
+   ========================================================================== */
+
+type PaletteAction = {
+  id: string;
+  title: string;
+  category: "Places" | "Navigation" | "Layout" | "Actions" | "View" | "Settings" | "Tags";
+  subtitle?: string;
+  shortcut?: string;
+  icon: string;
+  keywords?: string;
+  run: () => void | Promise<void>;
+};
+
+let paletteFiltered: PaletteAction[] = [];
+let paletteSelectedIndex = 0;
+
+function scoreItem(item: PaletteAction, query: string): number {
+  if (!query) return 1;
+  const q = query.toLowerCase();
+  const title = item.title.toLowerCase();
+  const sub = (item.subtitle || "").toLowerCase();
+  const keywords = (item.keywords || "").toLowerCase();
+
+  if (title === q) return 100;
+  if (title.startsWith(q)) return 80;
+  const titleIdx = title.indexOf(q);
+  if (titleIdx !== -1) return 60 - titleIdx;
+
+  const words = title.split(/[\s\-_]+/);
+  const acronym = words.map((w) => w[0]).join("");
+  if (acronym.startsWith(q)) return 50;
+
+  if (sub.includes(q)) return 30;
+  if (keywords.includes(q)) return 20;
+
+  const qWords = q.split(/\s+/).filter(Boolean);
+  if (qWords.length > 1 && qWords.every((w) => title.includes(w) || sub.includes(w) || keywords.includes(w))) {
+    return 15;
+  }
+  return 0;
+}
+
+function highlightMatches(text: string, query: string): string {
+  if (!query) return escapeHtml(text);
+  const q = query.toLowerCase();
+  const lower = text.toLowerCase();
+  const idx = lower.indexOf(q);
+  if (idx === -1) return escapeHtml(text);
+  const before = escapeHtml(text.slice(0, idx));
+  const match = escapeHtml(text.slice(idx, idx + q.length));
+  const after = escapeHtml(text.slice(idx + q.length));
+  return `${before}<mark class="palette-mark">${match}</mark>${after}`;
+}
+
+function getAllPaletteActions(): PaletteAction[] {
+  const actions: PaletteAction[] = [];
+
+  for (const [label, path] of builtinPlaces()) {
+    actions.push({
+      id: "place-" + label,
+      title: label,
+      category: "Places",
+      subtitle: path,
+      icon: quickIconFor(label),
+      keywords: label.toLowerCase() + " folder place jump",
+      run: () => void navigate(path),
+    });
+  }
+
+  actions.push({
+    id: "place-trash",
+    title: "Trash",
+    category: "Places",
+    subtitle: "freedesktop Trash",
+    icon: ICONS.trash,
+    keywords: "recycle bin deleted files",
+    run: () => void openTrash(),
+  });
+
+  for (const p of state.pinned) {
+    actions.push({
+      id: "pin-" + p,
+      title: baseName(p),
+      category: "Places",
+      subtitle: `Pinned · ${p}`,
+      icon: ICONS.pin,
+      keywords: "pinned favorite bookmark " + baseName(p).toLowerCase(),
+      run: () => void navigate(p),
+    });
+  }
+
+  for (const d of state.drives) {
+    const isMounted = d.mounted !== false && !!d.mount;
+    actions.push({
+      id: "drive-" + d.name,
+      title: d.name + (!isMounted ? " (Mount)" : ""),
+      category: "Places",
+      subtitle: isMounted ? `${d.mount} · ${fmtSize(d.free)} free of ${fmtSize(d.total)}` : `${d.device || ""} · Unmounted (click to mount)`,
+      icon: ICONS.drive,
+      keywords: "drive disk partition storage hdd ssd " + d.name.toLowerCase(),
+      run: () => {
+        if (isMounted) void navigate(d.mount);
+        else void mountDrive(d);
+      },
+    });
+  }
+
+  if (!state.isTrash) {
+    for (const e of state.entries) {
+      if (e.is_dir) {
+        actions.push({
+          id: "folder-" + e.path,
+          title: e.name,
+          category: "Places",
+          subtitle: `In current folder · ${e.path}`,
+          icon: ICONS.folder,
+          keywords: "folder subfolder " + e.name.toLowerCase(),
+          run: () => void navigate(e.path),
+        });
+      }
+    }
+  }
+
+  const tagCounts = getTagCounts();
+  for (const tagKey of ALL_TAGS) {
+    const def = TAG_DEFS[tagKey];
+    const count = tagCounts[tagKey] || 0;
+    actions.push({
+      id: "tag-view-" + tagKey,
+      title: `View Tag: ${def.label}` + (state.tag === tagKey ? " (Active)" : ""),
+      category: "Tags",
+      subtitle: `Show all files tagged ${def.label} (${count} item${count === 1 ? "" : "s"})`,
+      icon: ICONS.folder,
+      keywords: `tag label ${tagKey} ${def.label.toLowerCase()} filter color bookmark`,
+      run: () => void openTagView(tagKey),
+    });
+  }
+
+  if (state.selection.size > 0 && !state.isTrash) {
+    const selectedPaths = [...state.selection];
+    for (const tagKey of ALL_TAGS) {
+      const def = TAG_DEFS[tagKey];
+      actions.push({
+        id: "tag-toggle-" + tagKey,
+        title: `Tag Selected: ${def.label}`,
+        category: "Actions",
+        subtitle: `Toggle ${def.label} tag for ${selectedPaths.length} selected item${selectedPaths.length === 1 ? "" : "s"}`,
+        icon: ICONS.sun,
+        keywords: `tag color ${tagKey} ${def.label.toLowerCase()} mark label`,
+        run: () => toggleTagForPaths(selectedPaths, tagKey),
+      });
+    }
+    actions.push({
+      id: "tag-clear-selected",
+      title: "Clear Tags from Selected",
+      category: "Actions",
+      subtitle: `Remove all color tags from ${selectedPaths.length} selected item${selectedPaths.length === 1 ? "" : "s"}`,
+      icon: ICONS.trash,
+      keywords: "clear remove tags unmark untag",
+      run: () => clearTagsForPaths(selectedPaths),
+    });
+  }
+
+  actions.push({
+    id: "act-dual",
+    title: state.dual ? "Turn Off Dual Pane" : "Toggle Dual Pane (Split View)",
+    category: "Layout",
+    subtitle: "Side-by-side two-pane file manager",
+    shortcut: "Ctrl+Shift+D",
+    icon: ICONS.panel,
+    keywords: "split pane dual two columns view side by side",
+    run: () => void setDual(!state.dual),
+  });
+
+  if (state.dual) {
+    actions.push({
+      id: "act-pane-1",
+      title: "Focus Left Pane",
+      category: "Layout",
+      subtitle: "Switch active pane to the left",
+      shortcut: "Alt+1",
+      icon: ICONS.panel,
+      keywords: "left pane 1 focus switch",
+      run: () => setActivePane(0),
+    });
+    actions.push({
+      id: "act-pane-2",
+      title: "Focus Right Pane",
+      category: "Layout",
+      subtitle: "Switch active pane to the right",
+      shortcut: "Alt+2",
+      icon: ICONS.panel,
+      keywords: "right pane 2 focus switch",
+      run: () => setActivePane(1),
+    });
+  }
+
+  actions.push({
+    id: "act-preview",
+    title: "Toggle Preview Pane",
+    category: "Layout",
+    subtitle: "Show or hide the side inspect pane",
+    icon: ICONS.panel,
+    keywords: "preview inspect side details",
+    run: () => ($("preview-toggle") as HTMLButtonElement).click(),
+  });
+
+  actions.push({
+    id: "act-new-tab",
+    title: "New Tab",
+    category: "Navigation",
+    subtitle: "Open current folder in a new tab",
+    shortcut: "Ctrl+T",
+    icon: ICONS.folderPlus,
+    keywords: "tab new open duplicate",
+    run: () => newTab(),
+  });
+
+  actions.push({
+    id: "act-close-tab",
+    title: "Close Tab",
+    category: "Navigation",
+    subtitle: "Close the currently active tab",
+    shortcut: "Ctrl+W",
+    icon: ICONS.trash,
+    keywords: "close tab remove exit",
+    run: () => void closeTab(state.activeTab),
+  });
+
+  actions.push({
+    id: "act-reopen-tab",
+    title: "Reopen Closed Tab",
+    category: "Navigation",
+    subtitle: "Restore the last closed tab with its folder",
+    shortcut: "Ctrl+Shift+T",
+    icon: ICONS.undo,
+    keywords: "reopen closed tab restore undo",
+    run: () => void reopenClosedTab(),
+  });
+
+  actions.push({
+    id: "act-next-tab",
+    title: "Next Tab",
+    category: "Navigation",
+    subtitle: "Cycle to the next tab",
+    shortcut: "Ctrl+Tab",
+    icon: ICONS.list,
+    keywords: "switch tab next cycle",
+    run: () => void switchTab((state.activeTab + 1) % state.tabs.length),
+  });
+
+  actions.push({
+    id: "act-prev-tab",
+    title: "Previous Tab",
+    category: "Navigation",
+    subtitle: "Cycle to the previous tab",
+    shortcut: "Ctrl+Shift+Tab",
+    icon: ICONS.list,
+    keywords: "switch tab prev previous cycle",
+    run: () => void switchTab((state.activeTab + state.tabs.length - 1) % state.tabs.length),
+  });
+
+  actions.push({
+    id: "act-new-folder",
+    title: "New Folder",
+    category: "Actions",
+    subtitle: "Create a new folder in current directory",
+    shortcut: "Ctrl+Shift+N",
+    icon: ICONS.folderPlus,
+    keywords: "create make new directory folder mkdir",
+    run: () => askNew("folder"),
+  });
+
+  actions.push({
+    id: "act-new-file",
+    title: "New File",
+    category: "Actions",
+    subtitle: "Create a new empty text document",
+    icon: ICONS.filePlus,
+    keywords: "create make new file touch empty document",
+    run: () => askNew("file"),
+  });
+
+  actions.push({
+    id: "act-select-all",
+    title: "Select All",
+    category: "Actions",
+    subtitle: "Select all files and folders in current view",
+    shortcut: "Ctrl+A",
+    icon: ICONS.list,
+    keywords: "select all every everything",
+    run: () => selectAll(),
+  });
+
+  actions.push({
+    id: "act-invert-selection",
+    title: "Invert Selection",
+    category: "Actions",
+    subtitle: "Invert the current file selection",
+    icon: ICONS.list,
+    keywords: "invert toggle selection opposite",
+    run: () => invertSelection(),
+  });
+
+  actions.push({
+    id: "act-copy-path",
+    title: "Copy Path",
+    category: "Actions",
+    subtitle: state.selection.size > 0 ? "Copy paths of selected items to clipboard" : "Copy current directory path to clipboard",
+    icon: ICONS.copy,
+    keywords: "copy path full path clipboard",
+    run: () => void doCopyPath(),
+  });
+
+  if (state.selection.size > 0) {
+    actions.push({
+      id: "act-batch-rename",
+      title: `Batch Rename (${state.selection.size} item${state.selection.size === 1 ? "" : "s"})`,
+      category: "Actions",
+      subtitle: "Multi-file rename: regex, numbering, prefix/suffix, case change, clean spaces",
+      shortcut: "F2",
+      icon: ICONS.pencil,
+      keywords: "batch rename multiple replace numbering pattern case",
+      run: () => askBatchRename(),
+    });
+    actions.push({
+      id: "act-properties",
+      title: "Properties",
+      category: "Actions",
+      subtitle: "View file details, size, permissions, SHA-256 hash",
+      shortcut: "Alt+Enter",
+      icon: ICONS.info,
+      keywords: "properties chmod info permissions hash sha256 size",
+      run: () => void showProperties(),
+    });
+  }
+
+  if (state.selection.size === 1) {
+    actions.push({
+      id: "act-quicklook",
+      title: "Quick Look Preview",
+      category: "Actions",
+      subtitle: "Large instant file preview dialog",
+      shortcut: "Space",
+      icon: ICONS.image,
+      keywords: "quick look space preview large",
+      run: () => openQuickLook(),
+    });
+  }
+
+  actions.push({
+    id: "act-terminal",
+    title: "Open Terminal Here",
+    category: "Actions",
+    subtitle: `Launch default terminal in ${state.path}`,
+    icon: ICONS.command,
+    keywords: "terminal console bash zsh shell open here cli",
+    run: () => void doOpenTerminal(state.path),
+  });
+
+  actions.push({
+    id: "act-disk-analyzer",
+    title: `Analyze Disk Space (${baseName(state.path) || state.path})`,
+    category: "Actions",
+    subtitle: "Visual Treemap & folder usage breakdown",
+    shortcut: "Ctrl+Shift+U",
+    icon: ICONS.treemap,
+    keywords: "disk space usage analyzer treemap breakdown windirstat baobab visual",
+    run: () => void openDiskAnalyzer(state.path),
+  });
+
+  if (state.selection.size === 1) {
+    const sel = selectedEntries()[0];
+    if (sel && sel.is_dir) {
+      actions.push({
+        id: "act-disk-analyzer-selected",
+        title: `Analyze Disk Space: ${sel.name}`,
+        category: "Actions",
+        subtitle: `Scan and visualize usage for ${sel.path}`,
+        icon: ICONS.treemap,
+        keywords: "disk space usage analyzer folder " + sel.name.toLowerCase(),
+        run: () => void openDiskAnalyzer(sel.path),
+      });
+    }
+  }
+
+  if (state.gitInfo) {
+    actions.push({
+      id: "git-copy-branch",
+      title: `Copy Git Branch (${state.gitInfo.branch})`,
+      category: "Actions",
+      subtitle: `Repo: ${baseName(state.gitInfo.root)} · ${state.gitInfo.is_clean ? "Clean" : "Uncommitted changes"}`,
+      icon: ICONS.command,
+      keywords: "git branch copy name repo repository",
+      run: () => {
+        void copyText(state.gitInfo!.branch);
+        toast(`Branch "${state.gitInfo!.branch}" copied`);
+      },
+    });
+    actions.push({
+      id: "git-refresh-status",
+      title: "Refresh Git Status",
+      category: "Actions",
+      subtitle: "Re-scan repository working tree and branch",
+      icon: ICONS.undo,
+      keywords: "git status refresh reload sync",
+      run: () => void loadGitInfo(),
+    });
+  }
+
+  actions.push({
+    id: "act-dupes",
+    title: "Find Duplicate Files",
+    category: "Actions",
+    subtitle: "Scan current folder tree for duplicate file contents",
+    icon: ICONS.file,
+    keywords: "find duplicates hash identical files scanner",
+    run: () => void runDupes(),
+  });
+
+  if (state.dual) {
+    actions.push({
+      id: "act-compare",
+      title: "Compare with Other Pane",
+      category: "Actions",
+      subtitle: "Diff folder contents between left and right panes",
+      icon: ICONS.list,
+      keywords: "compare diff sync panes missing files",
+      run: () => void runCompare(),
+    });
+  }
+
+  if (state.isTrash) {
+    actions.push({
+      id: "act-empty-trash",
+      title: "Empty Trash",
+      category: "Actions",
+      subtitle: "Permanently delete all items in Trash",
+      icon: ICONS.trash,
+      keywords: "empty clear delete wipe trash",
+      run: () => askEmptyTrash(),
+    });
+  }
+
+  actions.push({
+    id: "act-hidden",
+    title: state.showHidden ? "Hide Hidden Files" : "Show Hidden Files (dotfiles)",
+    category: "View",
+    subtitle: "Toggle visibility of dotfiles and hidden folders",
+    shortcut: "Ctrl+H",
+    icon: ICONS.file,
+    keywords: "hidden files dotfiles dot toggle show",
+    run: () => toggleHiddenFiles(),
+  });
+
+  actions.push({
+    id: "act-view-details",
+    title: "Details View (Table)",
+    category: "View",
+    subtitle: "List files in sortable columns (Name, Size, Date, Type)",
+    icon: ICONS.list,
+    keywords: "details table list view columns rows",
+    run: () => {
+      state.view = "details";
+      saveTabs();
+      render();
+      showState(state.filtered.length === 0 ? "empty" : "full");
+    },
+  });
+
+  actions.push({
+    id: "act-view-icons",
+    title: "Icons View (Grid)",
+    category: "View",
+    subtitle: "Display files in thumbnail grid with tile zoom",
+    icon: ICONS.grid,
+    keywords: "icons grid gallery thumbnails view",
+    run: () => {
+      state.view = "icons";
+      saveTabs();
+      render();
+      showState(state.filtered.length === 0 ? "empty" : "full");
+    },
+  });
+
+  actions.push({
+    id: "act-theme",
+    title: "Toggle Theme (Light / Dark)",
+    category: "Settings",
+    subtitle: "Switch between dark obsidian and clean light mode",
+    icon: ICONS.sun,
+    keywords: "theme mode dark light color appearance",
+    run: () => ($("theme-toggle") as HTMLButtonElement).click(),
+  });
+
+  actions.push({
+    id: "act-appearance-panel",
+    title: "Appearance Settings",
+    category: "Settings",
+    subtitle: "Density, interface scale, icon grid size, grouping",
+    icon: ICONS.panel,
+    keywords: "appearance density scale zoom group settings",
+    run: () => {
+      toggleFilterPanel(false);
+      toggleAppearancePanel();
+    },
+  });
+
+  const currentAccent = getAccentColor();
+  for (const [key, preset] of Object.entries(ACCENT_PRESETS) as [AccentName, (typeof ACCENT_PRESETS)[AccentName]][]) {
+    actions.push({
+      id: "accent-" + key,
+      title: `Theme Accent: ${preset.label}` + (currentAccent === key ? " (Active)" : ""),
+      category: "Settings",
+      subtitle: `Switch accent color to ${preset.label}`,
+      icon: ICONS.sun,
+      keywords: `accent color theme ${key} ${preset.label.toLowerCase()}`,
+      run: () => setAccentColor(key),
+    });
+  }
+
+  actions.push({
+    id: "act-filter-panel",
+    title: "Filter Panel",
+    category: "Settings",
+    subtitle: "Filter by file type, extension, size range, date modified",
+    icon: ICONS.list,
+    keywords: "filter find types size date funnel",
+    run: () => {
+      toggleAppearancePanel(false);
+      toggleFilterPanel();
+    },
+  });
+
+  actions.push({
+    id: "act-search",
+    title: "Search Current Folder",
+    category: "Navigation",
+    subtitle: "Focus search bar to find files by name",
+    shortcut: "Ctrl+F",
+    icon: ICONS.doc,
+    keywords: "search find query name filter",
+    run: () => {
+      const s = $("search") as HTMLInputElement;
+      s.focus();
+      s.select();
+    },
+  });
+
+  actions.push({
+    id: "act-address",
+    title: "Go to Path (Address Bar)",
+    category: "Navigation",
+    subtitle: "Type or paste a folder path directly",
+    shortcut: "Ctrl+L",
+    icon: ICONS.folder,
+    keywords: "address bar path go location jump url",
+    run: () => showAddressBar(),
+  });
+
+  actions.push({
+    id: "act-refresh-drives",
+    title: "Refresh Drives & Partitions",
+    category: "Settings",
+    subtitle: "Re-scan mounted disks and unmounted partitions",
+    icon: ICONS.drive,
+    keywords: "refresh drives disks mount partition scan",
+    run: () => void refreshDrives(),
+  });
+
+  actions.push({
+    id: "act-refresh-dir",
+    title: "Refresh Current Folder",
+    category: "Navigation",
+    subtitle: "Reload current folder contents from disk",
+    shortcut: "F5",
+    icon: ICONS.undo,
+    keywords: "refresh reload update dir folder f5",
+    run: () => void loadDir(),
+  });
+
+  return actions;
+}
+
+function updatePaletteSelection(): void {
+  const listEl = $("palette-list");
+  if (!listEl) return;
+  const items = listEl.querySelectorAll<HTMLElement>(".palette-item");
+  items.forEach((el, i) => {
+    const isSel = i === paletteSelectedIndex;
+    el.classList.toggle("is-selected", isSel);
+    el.setAttribute("aria-selected", isSel ? "true" : "false");
+  });
+  scrollPaletteSelectionIntoView();
+}
+
+function scrollPaletteSelectionIntoView(): void {
+  const listEl = $("palette-list");
+  if (!listEl) return;
+  const selEl = listEl.querySelector<HTMLElement>(".palette-item.is-selected");
+  if (selEl) {
+    selEl.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function renderPaletteList(query: string): void {
+  const listEl = $("palette-list");
+  if (!listEl) return;
+  listEl.innerHTML = "";
+
+  if (paletteFiltered.length === 0) {
+    listEl.innerHTML = `
+      <div class="palette-empty">
+        <span>No commands or places match "${escapeHtml(query)}"</span>
+        <span style="font-size: 11.5px; opacity: 0.65;">Try a different keyword or prefix with &gt; for commands</span>
+      </div>
+    `;
+    return;
+  }
+
+  const shown = paletteFiltered.slice(0, 40);
+  let currentGroup = "";
+
+  shown.forEach((item, idx) => {
+    if (!query && item.category !== currentGroup) {
+      currentGroup = item.category;
+      const groupEl = document.createElement("div");
+      groupEl.className = "palette-group-title";
+      groupEl.textContent = currentGroup;
+      listEl.appendChild(groupEl);
+    }
+
+    const row = document.createElement("div");
+    row.className = "palette-item" + (idx === paletteSelectedIndex ? " is-selected" : "");
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", idx === paletteSelectedIndex ? "true" : "false");
+    row.dataset.idx = String(idx);
+
+    row.innerHTML = `
+      <span class="palette-item-icon">${iconSvg(item.icon)}</span>
+      <div class="palette-item-main">
+        <span class="palette-item-title">${highlightMatches(item.title, query)}</span>
+        ${item.subtitle ? `<span class="palette-item-sub">${escapeHtml(item.subtitle)}</span>` : ""}
+      </div>
+      <div class="palette-item-badge">
+        ${item.shortcut ? `<kbd class="palette-kbd">${escapeHtml(item.shortcut)}</kbd>` : `<span class="palette-category-badge">${escapeHtml(item.category)}</span>`}
+      </div>
+    `;
+
+    row.addEventListener("mouseenter", () => {
+      paletteSelectedIndex = idx;
+      updatePaletteSelection();
+    });
+
+    row.addEventListener("click", () => {
+      closePalette();
+      void item.run();
+    });
+
+    listEl.appendChild(row);
+  });
+
+  scrollPaletteSelectionIntoView();
+}
+
+function updatePaletteResults(rawQuery: string): void {
+  const q = rawQuery.trim();
+  const allActions = getAllPaletteActions();
+  const isCommandOnly = q.startsWith(">");
+  const cleanQuery = (isCommandOnly ? q.slice(1) : q).trim();
+
+  let results: { item: PaletteAction; score: number }[] = [];
+
+  for (const item of allActions) {
+    if (isCommandOnly && item.category === "Places") continue;
+    const score = scoreItem(item, cleanQuery);
+    if (score > 0) {
+      results.push({ item, score });
+    }
+  }
+
+  results.sort((a, b) => b.score - a.score);
+  paletteFiltered = results.map((r) => r.item);
+
+  if ((cleanQuery.startsWith("/") || cleanQuery.startsWith("~")) && cleanQuery.length > 1) {
+    const resolved = cleanQuery.startsWith("~") ? state.homeDir + cleanQuery.slice(1) : cleanQuery;
+    paletteFiltered.unshift({
+      id: "direct-path-jump",
+      title: `Go to "${cleanQuery}"`,
+      category: "Navigation",
+      subtitle: resolved,
+      icon: ICONS.folder,
+      run: () => void navigate(resolved),
+    });
+  }
+
+  paletteSelectedIndex = 0;
+  renderPaletteList(cleanQuery);
+}
+
+function openPalette(): void {
+  const dlg = $("dlg-palette") as HTMLDialogElement;
+  if (!dlg) return;
+  const input = $("palette-input") as HTMLInputElement;
+  input.value = "";
+  dlg.showModal();
+  updatePaletteResults("");
+  input.focus();
+}
+
+function closePalette(): void {
+  const dlg = $("dlg-palette") as HTMLDialogElement;
+  if (dlg && dlg.open) dlg.close();
+}
+
+function togglePalette(): void {
+  const dlg = $("dlg-palette") as HTMLDialogElement;
+  if (dlg && dlg.open) closePalette();
+  else openPalette();
 }
 
 function renderSidebar(): void {
@@ -3420,8 +5790,9 @@ function renderSidebar(): void {
   for (const [label, path] of builtinPlaces()) {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "nav-item";
-    b.innerHTML = `${iconSvg(ICONS.folder)}${label}`;
+    b.className = "nav-item" + (!state.isTrash && state.path === path ? " is-active" : "");
+    b.dataset.path = path;
+    b.innerHTML = `${iconSvg(quickIconFor(label))}${label}`;
     b.addEventListener("click", () => void navigate(path));
     attachDropTarget(b, () => path);
     quick.appendChild(b);
@@ -3429,10 +5800,10 @@ function renderSidebar(): void {
   for (const path of state.pinned) {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "nav-item";
+    b.className = "nav-item" + (!state.isTrash && state.path === path ? " is-active" : "");
     b.dataset.path = path;
     b.title = path;
-    b.innerHTML = `${iconSvg(ICONS.folder)}${escapeHtml(baseName(path))}`;
+    b.innerHTML = `${iconSvg(ICONS.folder)}<span>${escapeHtml(baseName(path))}</span><span class="nav-meta pin-badge">${iconSvg(ICONS.pin)}</span>`;
     b.addEventListener("click", () => void navigate(path));
     b.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
@@ -3441,17 +5812,64 @@ function renderSidebar(): void {
     attachDropTarget(b, () => path);
     quick.appendChild(b);
   }
+  const tagList = $("tag-list");
+  if (tagList) {
+    tagList.innerHTML = "";
+    const counts = getTagCounts();
+    const isLight = document.documentElement.dataset.theme === "light";
+    for (const tagKey of ALL_TAGS) {
+      const def = TAG_DEFS[tagKey];
+      const count = counts[tagKey] || 0;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "nav-item nav-tag" + (state.tag === tagKey ? " is-active" : "");
+      b.dataset.tag = tagKey;
+      const col = isLight ? def.lightColor : def.color;
+      b.innerHTML = `<span class="nav-tag-dot" style="background:${col}"></span><span>${escapeHtml(def.label)}</span>${count > 0 ? `<span class="nav-meta">${count}</span>` : ""}`;
+      b.addEventListener("click", () => void openTagView(tagKey));
+
+      b.addEventListener("dragover", (ev) => {
+        if (!isInternalDrag(ev)) return;
+        ev.preventDefault();
+        ev.dataTransfer!.dropEffect = "copy";
+        markDropTarget(b);
+      });
+      b.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        markDropTarget(null);
+        const paths = dropPaths(ev);
+        if (paths && paths.length > 0) {
+          toggleTagForPaths(paths, tagKey);
+          toast(`Tagged ${paths.length} item${paths.length > 1 ? "s" : ""} as ${def.label}`);
+        }
+      });
+      tagList.appendChild(b);
+    }
+  }
   const dl = $("drive-list");
   dl.innerHTML = "";
   for (const d of state.drives) {
+    const isMounted = d.mounted !== false && !!d.mount;
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "nav-item nav-drive";
-    const used = d.total > 0 ? Math.round(((d.total - d.free) / d.total) * 100) : 0;
-    b.innerHTML = `<span class="nav-drive-row">${iconSvg(ICONS.drive)}<span>${escapeHtml(d.name)}</span><span class="nav-meta">${fmtSize(d.free)} free</span></span><span class="drive-bar" title="${used}% used"><span style="width: ${used}%" class="${used >= 90 ? "is-full" : ""}"></span></span>`;
-    b.title = `${d.mount} · ${d.fs} · ${fmtSize(d.free)} free of ${fmtSize(d.total)} (${used}% used)`;
-    b.addEventListener("click", () => void navigate(d.mount));
-    attachDropTarget(b, () => d.mount);
+    b.className = "nav-item nav-drive" + (isMounted && !state.isTrash && state.path === d.mount ? " is-active" : "") + (!isMounted ? " is-unmounted" : "");
+    if (isMounted) {
+      b.dataset.path = d.mount;
+      const used = d.total > 0 ? Math.round(((d.total - d.free) / d.total) * 100) : 0;
+      b.innerHTML = `<span class="nav-drive-row">${iconSvg(ICONS.drive)}<span>${escapeHtml(d.name)}</span><span class="nav-meta">${fmtSize(d.free)} free</span></span><span class="drive-bar" title="${used}% used"><span style="width: ${used}%" class="${used >= 90 ? "is-full" : ""}"></span></span>`;
+      b.title = `${d.mount} · ${d.fs || "filesystem"} · ${fmtSize(d.free)} free of ${fmtSize(d.total)} (${used}% used)`;
+      b.addEventListener("click", () => void navigate(d.mount));
+      attachDropTarget(b, () => d.mount);
+    } else {
+      if (d.device) b.dataset.device = d.device;
+      b.innerHTML = `<span class="nav-drive-row">${iconSvg(ICONS.drive)}<span>${escapeHtml(d.name)}</span><span class="nav-mount-badge">Mount</span></span><span class="drive-bar drive-bar-unmounted"><span></span></span>`;
+      b.title = `${d.device || d.name} · ${d.fs || "partition"} · ${d.total > 0 ? fmtSize(d.total) : "Unmounted"} (click to mount)`;
+      b.addEventListener("click", () => void mountDrive(d));
+    }
+    b.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      showDriveMenu(ev.clientX, ev.clientY, d);
+    });
     dl.appendChild(b);
   }
   // Trash: a virtual location (the freedesktop Trash), not a folder.
@@ -3490,7 +5908,8 @@ async function init(): Promise<void> {
   const home = await invoke<string>("get_home");
   state.homeDir = home;
   // Appearance preferences apply before the first render so the window
-  // never flashes the default density/scale.
+  // never flashes the default density/scale/accent.
+  applyAccentColor();
   applyDensity();
   applyUiScale();
   loadPins();
@@ -3572,13 +5991,43 @@ async function init(): Promise<void> {
   $("act-cut").addEventListener("click", () => void doCopyCut("cut"));
   $("act-copy").addEventListener("click", () => void doCopyCut("copy"));
   $("act-paste").addEventListener("click", () => void doPaste());
-  $("act-rename").addEventListener("click", askRename);
+  $("act-rename").addEventListener("click", () => {
+    if (state.selection.size > 1) askBatchRename();
+    else askRename();
+  });
   $("act-delete").addEventListener("click", askDelete);
   $("act-props").addEventListener("click", () => void showProperties());
   $("act-restore").addEventListener("click", () => void doRestore());
   $("act-delete-permanent").addEventListener("click", askDelete);
   $("act-empty-trash").addEventListener("click", askEmptyTrash);
   $("act-dupes").addEventListener("click", () => void runDupes());
+  $("act-analyzer").addEventListener("click", () => void openDiskAnalyzer());
+
+  $("analyzer-btn-close")?.addEventListener("click", closeDiskAnalyzer);
+  $("analyzer-done-btn")?.addEventListener("click", closeDiskAnalyzer);
+  $("analyzer-btn-refresh")?.addEventListener("click", () => {
+    if (analyzerCurrentPath) void scanAnalyzerPath(analyzerCurrentPath);
+  });
+  $("analyzer-btn-up")?.addEventListener("click", () => {
+    if (analyzerCurrentPath) {
+      const p = parentOf(analyzerCurrentPath);
+      if (p) void scanAnalyzerPath(p);
+    }
+  });
+  $("analyzer-btn-cancel")?.addEventListener("click", () => {
+    void invoke("cancel_analyze_space");
+    analyzerIsScanning = false;
+    ($("analyzer-loading") as HTMLElement).hidden = true;
+  });
+  $("analyzer-view-both")?.addEventListener("click", () => setAnalyzerViewMode("both"));
+  $("analyzer-view-treemap")?.addEventListener("click", () => setAnalyzerViewMode("treemap"));
+  $("analyzer-view-list")?.addEventListener("click", () => setAnalyzerViewMode("list"));
+  $("analyzer-reveal-btn")?.addEventListener("click", () => {
+    if (analyzerCurrentPath) void revealInFileMon(analyzerCurrentPath);
+  });
+  $("analyzer-terminal-btn")?.addEventListener("click", () => {
+    if (analyzerCurrentPath) void doOpenTerminal(analyzerCurrentPath);
+  });
   $("act-dual").addEventListener("click", () => void setDual(!state.dual));
   $("act-appearance").addEventListener("click", (ev) => {
     ev.stopPropagation();
@@ -3588,6 +6037,36 @@ async function init(): Promise<void> {
   $("act-filter").addEventListener("click", (ev) => {
     ev.stopPropagation();
     toggleFilterPanel();
+  });
+  $("act-palette").addEventListener("click", () => togglePalette());
+  const palInput = $("palette-input") as HTMLInputElement;
+  palInput.addEventListener("input", () => {
+    updatePaletteResults(palInput.value);
+  });
+  palInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      if (paletteFiltered.length > 0) {
+        paletteSelectedIndex = (paletteSelectedIndex + 1) % paletteFiltered.length;
+        updatePaletteSelection();
+      }
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      if (paletteFiltered.length > 0) {
+        paletteSelectedIndex = (paletteSelectedIndex - 1 + paletteFiltered.length) % paletteFiltered.length;
+        updatePaletteSelection();
+      }
+    } else if (ev.key === "Enter") {
+      ev.preventDefault();
+      const sel = paletteFiltered[paletteSelectedIndex];
+      if (sel) {
+        closePalette();
+        void sel.run();
+      }
+    } else if (ev.key === "Escape") {
+      ev.preventDefault();
+      closePalette();
+    }
   });
   for (const id of ["filter-kind", "filter-ext", "filter-min", "filter-max", "filter-after", "filter-before"]) {
     $(id).addEventListener("input", () => applyFilterFromPanel());
@@ -3623,6 +6102,9 @@ async function init(): Promise<void> {
   });
   document.querySelectorAll("#appearance-panel [data-zoom]").forEach((b) => {
     b.addEventListener("click", () => setGridZoom(Number((b as HTMLElement).dataset.zoom) as 0 | 1 | 2));
+  });
+  document.querySelectorAll("#appearance-panel [data-accent]").forEach((b) => {
+    b.addEventListener("click", () => setAccentColor((b as HTMLElement).dataset.accent as AccentName));
   });
   // Clicking anywhere outside the panel closes it (the button stops its
   // own click from reaching here).
@@ -3801,6 +6283,42 @@ async function init(): Promise<void> {
   // Never let the webview navigate away when a file is dropped on it.
   window.addEventListener("dragover", (ev) => ev.preventDefault());
   window.addEventListener("drop", (ev) => ev.preventDefault());
+  window.addEventListener("focus", () => {
+    void refreshDrives();
+    void loadGitInfo();
+  });
+
+  const gitBadge = $("git-badge");
+  if (gitBadge) {
+    gitBadge.addEventListener("click", () => {
+      if (!state.gitInfo) return;
+      const branch = state.gitInfo.branch;
+      void copyText(branch);
+      toast(`Branch "${branch}" copied to clipboard`);
+    });
+    gitBadge.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      if (!state.gitInfo) return;
+      const info = state.gitInfo;
+      showMenuAt(ev.clientX, ev.clientY, [
+        {
+          label: `Copy branch (${info.branch})`,
+          action: () => {
+            void copyText(info.branch);
+            toast(`Branch "${info.branch}" copied`);
+          },
+        },
+        {
+          label: "Open Terminal Here",
+          action: () => void doOpenTerminal(state.path),
+        },
+        {
+          label: "Refresh Git status",
+          action: () => void loadGitInfo(),
+        },
+      ]);
+    });
+  }
   document.addEventListener("click", (ev) => {
     if (!(ev.target as HTMLElement).closest("#ctx-menu")) hideContextMenu();
   });
@@ -3811,6 +6329,38 @@ async function init(): Promise<void> {
       toggleAppearancePanel(false);
       toggleFilterPanel(false);
       hideAddressBar();
+      closePalette();
+      if (($("dlg-analyzer") as HTMLDialogElement).open) {
+        closeDiskAnalyzer();
+      }
+    }
+    // Ctrl+Shift+U opens the Disk Space Analyzer
+    if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === "u") {
+      ev.preventDefault();
+      void openDiskAnalyzer();
+      return;
+    }
+    // When Disk Space Analyzer is open, handle its navigation shortcuts
+    if (($("dlg-analyzer") as HTMLDialogElement).open) {
+      if (ev.key === "Backspace" || (ev.altKey && ev.key === "ArrowUp")) {
+        ev.preventDefault();
+        if (analyzerCurrentPath) {
+          const p = parentOf(analyzerCurrentPath);
+          if (p) void scanAnalyzerPath(p);
+        }
+        return;
+      }
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "r") {
+        ev.preventDefault();
+        if (analyzerCurrentPath) void scanAnalyzerPath(analyzerCurrentPath);
+        return;
+      }
+    }
+    // Ctrl+K or Ctrl+P opens the Command Palette from anywhere
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key.toLowerCase() === "k" || ev.key.toLowerCase() === "p")) {
+      ev.preventDefault();
+      togglePalette();
+      return;
     }
     // While Quick Look is open it owns the keyboard: Esc/Space close it,
     // Left/Right step through the listing, everything else is swallowed.
@@ -3847,11 +6397,7 @@ async function init(): Promise<void> {
     // Ctrl+H toggles hidden files (the checkbox in the toolbar does the same).
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "h") {
       ev.preventDefault();
-      state.showHidden = !state.showHidden;
-      ($("show-hidden") as HTMLInputElement).checked = state.showHidden;
-      localStorage.setItem("filemon-hidden", state.showHidden ? "1" : "0");
-      render();
-      showState(state.filtered.length === 0 ? "empty" : "full");
+      toggleHiddenFiles();
       return;
     }
     // Ctrl+Shift+D toggles dual pane; Alt+1 / Alt+2 switch the active pane.
@@ -3894,6 +6440,9 @@ async function init(): Promise<void> {
     } else if (ev.altKey && ev.key === "ArrowUp") {
       ev.preventDefault();
       $("btn-up").click();
+    } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "a") {
+      ev.preventDefault();
+      selectAll();
     } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "c") {
       void doCopyCut("copy");
     } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "x") {
@@ -3907,7 +6456,11 @@ async function init(): Promise<void> {
       askDelete();
     } else if (ev.key === "F2") {
       ev.preventDefault();
-      askRename();
+      if (state.selection.size > 1) {
+        askBatchRename();
+      } else {
+        askRename();
+      }
     } else if ((ev.ctrlKey || ev.metaKey) && (ev.key === "=" || ev.key === "+") && state.view === "icons") {
       ev.preventDefault();
       setGridZoom(Math.min(2, state.zoom + 1) as 0 | 1 | 2);
@@ -3953,9 +6506,26 @@ async function init(): Promise<void> {
     ev.preventDefault();
     void doBatchRename();
   });
-  for (const id of ["batch-find", "batch-replace", "batch-prefix", "batch-suffix", "batch-number", "batch-num-start", "batch-num-pad"]) {
-    $(id).addEventListener("input", () => updateBatchPreview());
-    $(id).addEventListener("change", () => updateBatchPreview());
+  document.querySelectorAll(".batch-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tab = (btn as HTMLElement).dataset.batchTab as BatchTab;
+      if (tab) switchBatchTab(tab);
+    });
+  });
+  const batchInputIds = [
+    "batch-find", "batch-replace", "batch-match-case", "batch-regex", "batch-replace-all", "batch-include-ext",
+    "batch-prefix", "batch-suffix",
+    "batch-num-base", "batch-num-pos", "batch-num-sep", "batch-num-start", "batch-num-step", "batch-num-pad",
+    "batch-case-style", "batch-case-scope",
+    "batch-clean-spaces", "batch-clean-symbols", "batch-clean-numbers", "batch-clean-trim",
+    "batch-global-case",
+  ];
+  for (const id of batchInputIds) {
+    const el = $(id);
+    if (el) {
+      el.addEventListener("input", () => updateBatchPreview());
+      el.addEventListener("change", () => updateBatchPreview());
+    }
   }
   ($("new-confirm") as HTMLButtonElement).addEventListener("click", (ev) => {
     ev.preventDefault();
@@ -3967,9 +6537,12 @@ async function init(): Promise<void> {
     else if (deleteMode === "empty") void doEmptyTrash();
     else void doDelete();
   });
-  for (const id of ["dlg-rename", "dlg-new", "dlg-delete", "dlg-batch", "dlg-open-with"]) {
+  for (const id of ["dlg-rename", "dlg-new", "dlg-delete", "dlg-batch", "dlg-open-with", "dlg-palette", "dlg-analyzer"]) {
     ($(id) as HTMLDialogElement).addEventListener("click", (ev) => {
-      if (ev.target === $(id)) ($(id) as HTMLDialogElement).close();
+      if (ev.target === $(id)) {
+        if (id === "dlg-analyzer") closeDiskAnalyzer();
+        else ($(id) as HTMLDialogElement).close();
+      }
     });
   }
 

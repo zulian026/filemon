@@ -3,7 +3,7 @@
 
 mod fsops;
 
-use fsops::{Drive, Entry, Properties, TransferOutcome};
+use fsops::{Drive, Entry, GitRepoInfo, Properties, TransferOutcome};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Emitter;
@@ -23,8 +23,28 @@ fn list_dir(path: String) -> Result<Vec<Entry>, String> {
 }
 
 #[tauri::command]
+fn get_entries(paths: Vec<String>) -> Vec<Entry> {
+    fsops::get_entries(&paths)
+}
+
+#[tauri::command]
 fn get_drives() -> Vec<Drive> {
     fsops::drives()
+}
+
+#[tauri::command]
+fn mount_drive(device: String) -> Result<String, String> {
+    fsops::mount_drive(&device)
+}
+
+#[tauri::command]
+fn unmount_drive(target: String) -> Result<(), String> {
+    fsops::unmount_drive(&target)
+}
+
+#[tauri::command]
+fn get_git_info(path: String) -> Option<GitRepoInfo> {
+    fsops::get_git_info(&PathBuf::from(path))
 }
 
 #[tauri::command]
@@ -236,13 +256,29 @@ fn format_size(bytes: u64) -> String {
     fsops::format_size(bytes)
 }
 
+#[tauri::command]
+fn analyze_space(path: String) -> Result<fsops::DiskUsageReport, String> {
+    fsops::analyze_space(&PathBuf::from(path))
+}
+
+#[tauri::command]
+fn cancel_analyze_space() {
+    fsops::cancel_analyze_space();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_home,
             list_dir,
+            get_entries,
+            analyze_space,
+            cancel_analyze_space,
             get_drives,
+            mount_drive,
+            unmount_drive,
+            get_git_info,
             search_files,
             search_content,
             compare_dirs,

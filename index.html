@@ -20,26 +20,63 @@
         var s = document.documentElement.style;
         var tokens = {
           "color-scheme": light ? "light" : "",
-          "--color-paper": light ? "#fafafa" : "",
+          "--color-paper": light ? "#f8fafc" : "",
           "--color-paper-2": light ? "#ffffff" : "",
-          "--color-paper-3": light ? "#f0f0f0" : "",
-          "--color-ink": light ? "#111111" : "",
-          "--color-ink-2": light ? "#333333" : "",
-          "--color-muted": light ? "#666666" : "",
-          "--color-muted-2": light ? "#8a8a8a" : "",
-          "--color-rule": light ? "#e0e0e0" : "",
-          "--color-rule-2": light ? "#eeeeee" : "",
-          "--color-accent-2": light ? "#2563eb" : "",
-          "--color-focus": light ? "#4d7c0f" : ""
+          "--color-paper-3": light ? "#f1f5f9" : "",
+          "--color-paper-hover": light ? "#e2e8f0" : "",
+          "--color-paper-elevated": light ? "#ffffff" : "",
+          "--color-ink": light ? "#0f172a" : "",
+          "--color-ink-2": light ? "#334155" : "",
+          "--color-muted": light ? "#64748b" : "",
+          "--color-muted-2": light ? "#94a3b8" : "",
+          "--color-rule": light ? "#e2e8f0" : "",
+          "--color-rule-2": light ? "#f1f5f9" : "",
+          "--color-rule-hover": light ? "#cbd5e1" : "",
+          "--color-accent": light ? "#2563eb" : "",
+          "--color-accent-ink": light ? "#ffffff" : "",
+          "--color-accent-2": light ? "#3b82f6" : "",
+          "--color-accent-subtle": light ? "rgba(37, 99, 235, 0.08)" : "",
+          "--color-focus": light ? "#2563eb" : "",
+          "--color-focus-ring": light ? "rgba(37, 99, 235, 0.25)" : "",
+          "--color-error": light ? "#e11d48" : "",
+          "--color-error-subtle": light ? "rgba(225, 29, 72, 0.08)" : "",
+          "--color-scrim": light ? "rgba(15, 23, 42, 0.45)" : ""
         };
         for (var k in tokens) {
           if (tokens[k]) s.setProperty(k, tokens[k]); else s.removeProperty(k);
         }
         try { localStorage.setItem("filemon-theme", light ? "light" : "dark"); } catch (e) {}
+        if (window.__applyAccent) window.__applyAccent();
+      };
+      window.__applyAccent = function (a) {
+        var acc = a || localStorage.getItem("filemon-accent") || "blue";
+        var isLight = document.documentElement.dataset.theme === "light";
+        var accents = {
+          blue: { d: ["#3b82f6", "#60a5fa", "rgba(59, 130, 246, 0.15)", "rgba(59, 130, 246, 0.4)"], l: ["#2563eb", "#3b82f6", "rgba(37, 99, 235, 0.08)", "rgba(37, 99, 235, 0.25)"] },
+          emerald: { d: ["#10b981", "#34d399", "rgba(16, 185, 129, 0.15)", "rgba(16, 185, 129, 0.4)"], l: ["#059669", "#10b981", "rgba(5, 150, 105, 0.08)", "rgba(5, 150, 105, 0.25)"] },
+          violet: { d: ["#8b5cf6", "#a78bfa", "rgba(139, 92, 246, 0.15)", "rgba(139, 92, 246, 0.4)"], l: ["#7c3aed", "#8b5cf6", "rgba(124, 58, 237, 0.08)", "rgba(124, 58, 237, 0.25)"] },
+          rose: { d: ["#f43f5e", "#fb7185", "rgba(244, 63, 94, 0.15)", "rgba(244, 63, 94, 0.4)"], l: ["#e11d48", "#f43f5e", "rgba(225, 29, 72, 0.08)", "rgba(225, 29, 72, 0.25)"] },
+          amber: { d: ["#f59e0b", "#fbbf24", "rgba(245, 158, 11, 0.15)", "rgba(245, 158, 11, 0.4)"], l: ["#d97706", "#f59e0b", "rgba(217, 119, 6, 0.08)", "rgba(217, 119, 6, 0.25)"] },
+          cyan: { d: ["#06b6d4", "#22d3ee", "rgba(6, 182, 212, 0.15)", "rgba(6, 182, 212, 0.4)"], l: ["#0891b2", "#06b6d4", "rgba(8, 145, 178, 0.08)", "rgba(8, 145, 178, 0.25)"] },
+          mono: { d: ["#e4e4e7", "#ffffff", "rgba(255, 255, 255, 0.12)", "rgba(255, 255, 255, 0.3)"], l: ["#18181b", "#27272a", "rgba(24, 24, 27, 0.08)", "rgba(24, 24, 27, 0.25)"] }
+        };
+        var c = (accents[acc] || accents.blue)[isLight ? "l" : "d"];
+        var s = document.documentElement.style;
+        s.setProperty("--color-accent", c[0]);
+        s.setProperty("--color-accent-2", c[1]);
+        s.setProperty("--color-accent-subtle", c[2]);
+        s.setProperty("--color-focus", c[0]);
+        s.setProperty("--color-focus-ring", c[3]);
+        s.setProperty("--color-file-folder", c[0]);
+        s.setProperty("--color-accent-gradient", "linear-gradient(135deg, " + c[0] + " 0%, " + c[1] + " 100%)");
+        document.documentElement.dataset.accent = acc;
+        try { localStorage.setItem("filemon-accent", acc); } catch (e) {}
       };
       try {
         var saved = localStorage.getItem("filemon-theme");
         if (saved === "light" || saved === "dark") window.__setTheme(saved);
+        var savedAcc = localStorage.getItem("filemon-accent");
+        if (savedAcc) window.__applyAccent(savedAcc);
       } catch (e) {}
     </script>
   </head>
@@ -47,12 +84,33 @@
     <div id="app">
       <aside id="sidebar">
         <div class="wordmark">
-          <svg class="wordmark-mark" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect x="3" y="7" width="11" height="4" fill="var(--color-accent)"/><rect x="3" y="10" width="26" height="18" fill="var(--color-accent)"/><rect x="7" y="14" width="18" height="2" fill="var(--color-paper)"/></svg>
-          <span class="wordmark-name">FileMon</span>
+          <div class="wordmark-icon-wrap">
+            <svg class="wordmark-mark" viewBox="0 0 28 28" width="22" height="22" fill="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="fm-grad" x1="0" y1="0" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="var(--color-accent)"/>
+                  <stop offset="1" stop-color="var(--color-accent-2)"/>
+                </linearGradient>
+                <linearGradient id="fm-grad-front" x1="4" y1="10" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#ffffff" stop-opacity="0.3"/>
+                  <stop offset="1" stop-color="#ffffff" stop-opacity="0.08"/>
+                </linearGradient>
+              </defs>
+              <rect x="2" y="4" width="10" height="4" rx="2" fill="url(#fm-grad)"/>
+              <rect x="2" y="6.5" width="24" height="17.5" rx="3.5" fill="url(#fm-grad)"/>
+              <rect x="2" y="9.5" width="24" height="14.5" rx="3" fill="url(#fm-grad-front)"/>
+              <path d="M6 13h16M6 16.5h10" stroke="#ffffff" stroke-opacity="0.8" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="wordmark-content">
+            <span class="wordmark-name">FileMon</span>
+          </div>
         </div>
         <nav id="nav" aria-label="Locations">
           <p class="nav-label">Quick access</p>
           <div id="quick-list"></div>
+          <p class="nav-label">Tags</p>
+          <div id="tag-list"></div>
           <p class="nav-label">Trash</p>
           <div id="trash-list"></div>
           <p class="nav-label">Drives</p>
@@ -74,6 +132,12 @@
           </div>
           <nav id="crumbs" class="crumbs" aria-label="Current folder"></nav>
           <input id="address-bar" class="address-bar mono" type="text" hidden aria-label="Go to folder (Ctrl+L)" autocomplete="off" spellcheck="false" />
+          <div id="git-badge" class="git-badge" hidden title="Git repository branch">
+            <svg class="icon git-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.5" cy="4" r="2"/><circle cx="4.5" cy="12" r="2"/><circle cx="11.5" cy="6.5" r="2"/><path d="M4.5 6v4M4.5 7.5a6 6 0 0 1 7-1"/></svg>
+            <span id="git-branch" class="git-branch">main</span>
+            <span id="git-status-dot" class="git-status-dot" title="Working tree clean"></span>
+            <span id="git-ahead-behind" class="git-sync-meta"></span>
+          </div>
           <div class="topbar-search search-field">
             <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.6 10.6L14 14"/></svg>
             <input id="search" type="search" placeholder="Search this folder, Enter searches everywhere below" aria-label="Search" autocomplete="off" />
@@ -98,9 +162,11 @@
           <button id="act-empty-trash" class="btn btn-danger" type="button" hidden title="Delete everything in the Trash permanently" aria-label="Empty Trash">Empty Trash</button>
           <button id="act-props" class="icon-btn" type="button" disabled title="Properties" aria-label="Properties"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.5V11M8 4.8v.3"/></svg></button>
           <button id="act-dupes" class="icon-btn" type="button" title="Find duplicate files in this folder" aria-label="Find duplicate files"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="8" height="8" rx="1"/><rect x="6" y="2" width="8" height="8" rx="1" fill="var(--color-paper)" /></svg></button>
+          <button id="act-analyzer" class="icon-btn" type="button" title="Disk Space Analyzer (Treemap & breakdown)" aria-label="Disk Space Analyzer"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M8 2.5v11M8 8h5.5"/></svg></button>
           <button id="act-dual" class="icon-btn" type="button" aria-pressed="false" title="Dual pane (Ctrl+Shift+D)" aria-label="Toggle dual pane"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="5" height="10" rx="1"/><rect x="9" y="3" width="5" height="10" rx="1"/></svg></button>
           <button id="act-appearance" class="icon-btn" type="button" aria-pressed="false" title="Appearance: grouping, density, scale, grid size" aria-label="Appearance settings"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/><circle cx="5.5" cy="4.5" r="1.6" fill="var(--color-paper-2)"/><circle cx="10.5" cy="8" r="1.6" fill="var(--color-paper-2)"/><circle cx="7" cy="11.5" r="1.6" fill="var(--color-paper-2)"/></svg></button>
           <button id="act-filter" class="icon-btn" type="button" aria-pressed="false" title="Filter by type, size, or date" aria-label="Filter files"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 3h11l-4.5 5.5v4l-2 1.5v-5.5z"/></svg></button>
+          <button id="act-palette" class="icon-btn" type="button" title="Command Palette (Ctrl+K or Ctrl+P)" aria-label="Command Palette"><svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 3.5h11a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/><path d="M5 6.5l2 1.5-2 1.5M9 9.5h2"/></svg></button>
           <span class="toolbar-spacer"></span>
           <label class="check-label"><input id="show-hidden" type="checkbox" /> Hidden files</label>
           <label class="sort-label" for="sort-key">Sort</label>
@@ -212,6 +278,16 @@
         <button class="seg-btn" type="button" data-zoom="1">Medium</button>
         <button class="seg-btn" type="button" data-zoom="2">Large</button>
       </div>
+      <p class="field-label">Accent color</p>
+      <div class="accent-swatches" role="radiogroup" aria-label="Accent color">
+        <button class="accent-swatch" type="button" data-accent="blue" title="Electric Blue" style="--swatch-color: #3b82f6;" aria-label="Electric Blue"></button>
+        <button class="accent-swatch" type="button" data-accent="emerald" title="Emerald Green" style="--swatch-color: #10b981;" aria-label="Emerald Green"></button>
+        <button class="accent-swatch" type="button" data-accent="violet" title="Cyber Violet" style="--swatch-color: #8b5cf6;" aria-label="Cyber Violet"></button>
+        <button class="accent-swatch" type="button" data-accent="rose" title="Crimson Rose" style="--swatch-color: #f43f5e;" aria-label="Crimson Rose"></button>
+        <button class="accent-swatch" type="button" data-accent="amber" title="Amber Gold" style="--swatch-color: #f59e0b;" aria-label="Amber Gold"></button>
+        <button class="accent-swatch" type="button" data-accent="cyan" title="Cyan Teal" style="--swatch-color: #06b6d4;" aria-label="Cyan Teal"></button>
+        <button class="accent-swatch" type="button" data-accent="mono" title="Monochrome" style="--swatch-color: #a1a1aa;" aria-label="Monochrome"></button>
+      </div>
     </div>
 
     <div id="filter-panel" class="appearance-panel" hidden>
@@ -319,32 +395,294 @@
       </form>
     </dialog>
 
-    <dialog id="dlg-batch" class="dialog">
-      <form method="dialog">
-        <h2>Batch rename</h2>
-        <p id="batch-count" class="preview-note"></p>
-        <label class="field-label" for="batch-find">Find</label>
-        <input id="batch-find" type="text" autocomplete="off" />
-        <label class="field-label" for="batch-replace">Replace with</label>
-        <input id="batch-replace" type="text" autocomplete="off" />
-        <label class="field-label" for="batch-prefix">Prefix</label>
-        <input id="batch-prefix" type="text" autocomplete="off" />
-        <label class="field-label" for="batch-suffix">Suffix (before the extension)</label>
-        <input id="batch-suffix" type="text" autocomplete="off" />
-        <label class="check-label batch-number"><input id="batch-number" type="checkbox" /> Add numbering (after the prefix)</label>
-        <div class="batch-num-row">
-          <label class="field-label" for="batch-num-start">Start at</label>
-          <input id="batch-num-start" type="number" value="1" min="0" />
-          <label class="field-label" for="batch-num-pad">Digits</label>
-          <input id="batch-num-pad" type="number" value="2" min="1" max="6" />
+    <dialog id="dlg-batch" class="dialog batch-dialog">
+      <form method="dialog" class="batch-form">
+        <div class="batch-header">
+          <div class="batch-header-text">
+            <h2>Batch Rename</h2>
+            <p id="batch-count" class="preview-note"></p>
+          </div>
+          <div class="batch-tabs" role="tablist">
+            <button id="batch-tab-btn-replace" class="batch-tab-btn is-active" type="button" data-batch-tab="replace">Replace</button>
+            <button id="batch-tab-btn-prefix" class="batch-tab-btn" type="button" data-batch-tab="prefix_suffix">Add Text</button>
+            <button id="batch-tab-btn-number" class="batch-tab-btn" type="button" data-batch-tab="number">Numbering</button>
+            <button id="batch-tab-btn-case" class="batch-tab-btn" type="button" data-batch-tab="case">Case</button>
+            <button id="batch-tab-btn-clean" class="batch-tab-btn" type="button" data-batch-tab="clean">Clean</button>
+          </div>
+        </div>
+
+        <!-- Tab 1: Replace -->
+        <div id="batch-panel-replace" class="batch-panel">
+          <div class="batch-grid-2">
+            <div>
+              <label class="field-label" for="batch-find">Find</label>
+              <input id="batch-find" type="text" placeholder="Text to find..." autocomplete="off" />
+            </div>
+            <div>
+              <label class="field-label" for="batch-replace">Replace with</label>
+              <input id="batch-replace" type="text" placeholder="Replacement text..." autocomplete="off" />
+            </div>
+          </div>
+          <div class="batch-options-row">
+            <label class="check-label"><input id="batch-match-case" type="checkbox" /> Match case</label>
+            <label class="check-label"><input id="batch-regex" type="checkbox" /> Use Regex</label>
+            <label class="check-label"><input id="batch-replace-all" type="checkbox" checked /> Replace all</label>
+            <label class="check-label"><input id="batch-include-ext" type="checkbox" /> Include extension</label>
+          </div>
+        </div>
+
+        <!-- Tab 2: Prefix / Suffix -->
+        <div id="batch-panel-prefix_suffix" class="batch-panel" hidden>
+          <div class="batch-grid-2">
+            <div>
+              <label class="field-label" for="batch-prefix">Prefix (at start)</label>
+              <input id="batch-prefix" type="text" placeholder="e.g. Doc_ or 2026_" autocomplete="off" />
+            </div>
+            <div>
+              <label class="field-label" for="batch-suffix">Suffix (before extension)</label>
+              <input id="batch-suffix" type="text" placeholder="e.g. _v1 or _draft" autocomplete="off" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Numbering -->
+        <div id="batch-panel-number" class="batch-panel" hidden>
+          <div class="batch-grid-3">
+            <div>
+              <label class="field-label" for="batch-num-base">Base name (optional)</label>
+              <input id="batch-num-base" type="text" placeholder="Keep original name" autocomplete="off" />
+            </div>
+            <div>
+              <label class="field-label" for="batch-num-pos">Number position</label>
+              <select id="batch-num-pos">
+                <option value="suffix">Suffix (Name_01)</option>
+                <option value="prefix">Prefix (01_Name)</option>
+                <option value="replace">Replace name (01)</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="batch-num-sep">Separator</label>
+              <select id="batch-num-sep">
+                <option value="_">Underscore (_)</option>
+                <option value="-">Dash (-)</option>
+                <option value=" ">Space ( )</option>
+                <option value=".">Dot (.)</option>
+                <option value="">None</option>
+              </select>
+            </div>
+          </div>
+          <div class="batch-num-row" style="margin-top: 8px;">
+            <label class="field-label" for="batch-num-start">Start at</label>
+            <input id="batch-num-start" type="number" value="1" min="0" />
+            <label class="field-label" for="batch-num-step">Step</label>
+            <input id="batch-num-step" type="number" value="1" min="1" />
+            <label class="field-label" for="batch-num-pad">Digits (padding)</label>
+            <select id="batch-num-pad">
+              <option value="1">1, 2, 3...</option>
+              <option value="2" selected>01, 02, 03...</option>
+              <option value="3">001, 002, 003...</option>
+              <option value="4">0001, 0002, 0003...</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Tab 4: Case -->
+        <div id="batch-panel-case" class="batch-panel" hidden>
+          <div class="batch-grid-2">
+            <div>
+              <label class="field-label" for="batch-case-style">Case transformation</label>
+              <select id="batch-case-style">
+                <option value="lower">lowercase (file name.jpg)</option>
+                <option value="upper">UPPERCASE (FILE NAME.JPG)</option>
+                <option value="title">Title Case (File Name.jpg)</option>
+                <option value="sentence">Sentence case (File name.jpg)</option>
+                <option value="camel">camelCase (fileName.jpg)</option>
+                <option value="kebab">kebab-case (file-name.jpg)</option>
+                <option value="snake">snake_case (file_name.jpg)</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="batch-case-scope">Apply to</label>
+              <select id="batch-case-scope">
+                <option value="name">Name only (keep extension)</option>
+                <option value="ext">Extension only (e.g. .PNG → .png)</option>
+                <option value="both">Both name and extension</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 5: Clean -->
+        <div id="batch-panel-clean" class="batch-panel" hidden>
+          <div class="batch-grid-2">
+            <div>
+              <label class="field-label" for="batch-clean-spaces">Spaces</label>
+              <select id="batch-clean-spaces">
+                <option value="dash">Replace spaces with dash (-)</option>
+                <option value="underscore">Replace spaces with underscore (_)</option>
+                <option value="remove">Remove all spaces</option>
+                <option value="keep">Keep spaces</option>
+              </select>
+            </div>
+            <div class="batch-options-col" style="margin-top: 18px;">
+              <label class="check-label"><input id="batch-clean-symbols" type="checkbox" /> Remove symbols (!@#$%^&*)</label>
+              <label class="check-label"><input id="batch-clean-numbers" type="checkbox" /> Remove numbers (0-9)</label>
+              <label class="check-label"><input id="batch-clean-trim" type="checkbox" checked /> Trim extra spaces</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Secondary Case Override Option (Global) -->
+        <div class="batch-global-row">
+          <label class="field-label" for="batch-global-case">Also transform case:</label>
+          <select id="batch-global-case">
+            <option value="none">None (keep as transformed)</option>
+            <option value="lower">lowercase</option>
+            <option value="upper">UPPERCASE</option>
+            <option value="title">Title Case</option>
+            <option value="kebab">kebab-case</option>
+            <option value="snake">snake_case</option>
+          </select>
+        </div>
+
+        <!-- Live Preview Header & List -->
+        <div class="batch-preview-header">
+          <span>Live Preview</span>
+          <span id="batch-preview-stats" class="batch-preview-stats"></span>
         </div>
         <div id="batch-preview" class="batch-preview"></div>
         <p id="batch-error" class="field-error" hidden></p>
+
         <div class="dialog-actions">
           <button class="btn btn-outline" value="cancel" type="submit">Cancel</button>
           <button id="batch-confirm" class="btn btn-primary" value="ok" type="submit">Rename</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="dlg-analyzer" class="dialog analyzer-dialog" aria-label="Visual Disk Space Analyzer">
+      <div class="analyzer-container">
+        <!-- Top Navigation & Controls Bar -->
+        <div class="analyzer-topbar">
+          <div class="analyzer-title-row">
+            <div class="analyzer-brand">
+              <svg class="icon analyzer-brand-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/>
+                <path d="M8 2.5v11M8 8h5.5"/>
+              </svg>
+              <h2>Disk Space Analyzer</h2>
+            </div>
+            <div class="analyzer-nav-group">
+              <button id="analyzer-btn-up" class="icon-btn" type="button" title="Go up to parent folder (Alt+Up)" aria-label="Parent folder">
+                <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3M3 8l5-5 5 5"/></svg>
+              </button>
+              <nav id="analyzer-crumbs" class="analyzer-crumbs" aria-label="Analyzer folder path"></nav>
+            </div>
+            <div class="analyzer-tools">
+              <div class="analyzer-view-tabs" role="group" aria-label="Analyzer view">
+                <button id="analyzer-view-both" class="analyzer-tab-btn is-active" type="button" title="Split View (Treemap + Ranked List)">Split</button>
+                <button id="analyzer-view-treemap" class="analyzer-tab-btn" type="button" title="Treemap Only">Treemap</button>
+                <button id="analyzer-view-list" class="analyzer-tab-btn" type="button" title="List Only">List</button>
+              </div>
+              <button id="analyzer-btn-refresh" class="icon-btn" type="button" title="Rescan folder (Ctrl+R)" aria-label="Rescan folder">
+                <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8A5.5 5.5 0 1 1 12 4.1L13.5 2.5M13.5 2.5V6M13.5 2.5H10"/></svg>
+              </button>
+              <button id="analyzer-btn-close" class="icon-btn" type="button" title="Close (Esc)" aria-label="Close">
+                <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Summary Stats Chips -->
+          <div id="analyzer-stats" class="analyzer-stats-bar">
+            <div class="analyzer-stat-chip">
+              <span class="analyzer-stat-label">Total Size</span>
+              <strong id="analyzer-stat-size" class="analyzer-stat-val">—</strong>
+            </div>
+            <div class="analyzer-stat-chip">
+              <span class="analyzer-stat-label">Files</span>
+              <strong id="analyzer-stat-files" class="analyzer-stat-val">—</strong>
+            </div>
+            <div class="analyzer-stat-chip">
+              <span class="analyzer-stat-label">Folders</span>
+              <strong id="analyzer-stat-dirs" class="analyzer-stat-val">—</strong>
+            </div>
+            <div class="analyzer-stat-chip analyzer-stat-chip-grow">
+              <span class="analyzer-stat-label">Largest Item</span>
+              <strong id="analyzer-stat-largest" class="analyzer-stat-val">—</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Analyzer Body Area -->
+        <div id="analyzer-body" class="analyzer-body">
+          <!-- Loading State Overlay -->
+          <div id="analyzer-loading" class="analyzer-loading-overlay" hidden>
+            <div class="analyzer-spinner"></div>
+            <p id="analyzer-loading-text">Analyzing disk usage…</p>
+            <span id="analyzer-loading-sub" class="analyzer-loading-sub mono"></span>
+            <button id="analyzer-btn-cancel" class="btn btn-outline btn-sm" type="button">Cancel Analysis</button>
+          </div>
+
+          <!-- Empty State -->
+          <div id="analyzer-empty" class="analyzer-empty-state" hidden>
+            <div class="empty-icon" aria-hidden="true"><svg width="40" height="40" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 2h6.5A1.5 1.5 0 0 1 16 6.5v6A1.5 1.5 0 0 1 14.5 14h-11A1.5 1.5 0 0 1 2 12.5v-8z"/></svg></div>
+            <p>This folder is empty or has 0 bytes of data.</p>
+          </div>
+
+          <!-- Split / Content Panels -->
+          <div id="analyzer-content" class="analyzer-content view-both">
+            <!-- Treemap Panel -->
+            <div id="analyzer-treemap-panel" class="analyzer-panel analyzer-treemap-panel">
+              <div class="analyzer-panel-header">
+                <span>Visual Treemap</span>
+                <span class="analyzer-panel-hint">Click folder to drill down</span>
+              </div>
+              <div id="analyzer-treemap-canvas" class="analyzer-treemap-canvas">
+                <svg id="analyzer-treemap-svg" class="analyzer-treemap-svg"></svg>
+              </div>
+            </div>
+
+            <!-- Ranked List Panel -->
+            <div id="analyzer-list-panel" class="analyzer-panel analyzer-list-panel">
+              <div class="analyzer-panel-header">
+                <span>Ranked Breakdown</span>
+                <span id="analyzer-list-count" class="analyzer-panel-hint"></span>
+              </div>
+              <div id="analyzer-list-container" class="analyzer-list-container">
+                <table class="analyzer-table">
+                  <thead>
+                    <tr>
+                      <th class="th-rank">#</th>
+                      <th class="th-name">Name</th>
+                      <th class="th-usage">Usage</th>
+                      <th class="th-size num">Size</th>
+                      <th class="th-items">Items</th>
+                      <th class="th-actions">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="analyzer-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Floating Tooltip for Treemap -->
+        <div id="analyzer-tooltip" class="analyzer-tooltip" hidden></div>
+
+        <!-- Dialog Footer -->
+        <div class="analyzer-footer">
+          <div class="analyzer-footer-hint">
+            <span>💡 Click any folder block or row to drill down · Click breadcrumbs to navigate up</span>
+          </div>
+          <div class="analyzer-footer-actions">
+            <button id="analyzer-reveal-btn" class="btn btn-outline btn-sm" type="button">Reveal in FileMon</button>
+            <button id="analyzer-terminal-btn" class="btn btn-outline btn-sm" type="button">Open in Terminal</button>
+            <button id="analyzer-done-btn" class="btn btn-primary btn-sm" type="button">Close</button>
+          </div>
+        </div>
+      </div>
     </dialog>
 
     <dialog id="dlg-props" class="dialog">
@@ -355,6 +693,23 @@
           <button class="btn btn-primary" value="ok" type="submit">Close</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="dlg-palette" class="palette-dialog" aria-label="Command Palette">
+      <div class="palette-box">
+        <div class="palette-header">
+          <svg class="icon palette-search-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.6 10.6L14 14"/></svg>
+          <input id="palette-input" class="palette-input" type="text" placeholder="Type a command or jump to folder... (type > for commands)" autocomplete="off" spellcheck="false" />
+          <kbd class="palette-esc-badge">ESC</kbd>
+        </div>
+        <div id="palette-list" class="palette-list" role="listbox"></div>
+        <div class="palette-footer">
+          <span class="palette-footer-item"><kbd class="palette-kbd">↑</kbd><kbd class="palette-kbd">↓</kbd> Navigate</span>
+          <span class="palette-footer-item"><kbd class="palette-kbd">↵</kbd> Select</span>
+          <span class="palette-footer-item"><kbd class="palette-kbd">esc</kbd> Dismiss</span>
+          <span class="palette-footer-hint">Prefix with <code>&gt;</code> for commands</span>
+        </div>
+      </div>
     </dialog>
 
     <div id="toast" class="toast" role="status" hidden></div>

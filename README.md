@@ -12,6 +12,16 @@ FileMon is a Windows Explorer-style file manager for Linux, built with [Tauri v2
 
 ## Features
 
+### New in v0.1.2
+
+- **Visual Disk Space Analyzer** — Ctrl+Shift+U opens a squarified treemap of the current folder (SVG, per-category colours, hover tooltips with size and share, click a folder block to drill in), next to a ranked breakdown list with usage bars and per-row Reveal / Open in Terminal / Move to Trash. Breadcrumbs, Split / Treemap-only / List-only modes, Backspace / Alt+Up to go up, Ctrl+R to rescan, Esc to close. Also from the toolbar, a folder's right-click menu, a drive's right-click menu, and the Command Palette (Ctrl+K).
+- **Partition and drive management** — the sidebar lists mounted and unmounted drives (from `/proc/mounts`, sysfs, and `lsblk` / UDisks2) with free space and a usage bar; unmounted drives show a Mount badge, mount on click, and open. Drive right-click: Open, Open in new tab, Copy mount path, Copy device path, Unmount (system paths protected), Analyze Disk Space.
+- **Color tags** — Finder-style colour labels on files and folders, set from the right-click menu and searchable.
+- **Advanced Batch Renamer** — F2 on multiple files: find/replace, prefix, suffix, numbering, with a live old → new preview and collision check.
+- **Folder colours and accent themes** — folder icons follow the chosen accent (Blue, Purple, Emerald, Amber, Rose, Cyan); the Pitch Black (`#000000`) theme and accent persist in localStorage and apply before first paint, so there is no flash.
+- **Quick Look** — now also steps through files with Left/Right and handles more formats; video still shows the first frame only (no inline player: this WebKitGTK crashes on any `<video>` load).
+- **Command Palette** — Ctrl+K / Ctrl+P searches commands, locations, tags, and partitions.
+
 ### Browsing
 
 - **Explorer shell** — sidebar with Quick access, Trash, and drives; breadcrumbs; back/forward/up navigation with history.
@@ -68,14 +78,14 @@ Linux (x86_64) only. Get the latest release from the
 **AppImage (recommended):**
 
 ```bash
-chmod +x FileMon_0.1.1_amd64.AppImage
-./FileMon_0.1.1_amd64.AppImage
+chmod +x FileMon_0.1.2_amd64.AppImage
+./FileMon_0.1.2_amd64.AppImage
 ```
 
 **Debian package (Debian/Ubuntu):**
 
 ```bash
-sudo apt install ./FileMon_0.1.1_amd64.deb
+sudo apt install ./FileMon_0.1.2_amd64.deb
 ```
 
 Installs `filemon` to `/usr/bin` with an app-menu entry; dependencies are pulled in automatically.
@@ -83,7 +93,7 @@ Installs `filemon` to `/usr/bin` with an app-menu entry; dependencies are pulled
 **RPM package (Fedora/openSUSE):**
 
 ```bash
-sudo dnf install ./FileMon-0.1.1-1.x86_64.rpm
+sudo dnf install ./FileMon-0.1.2-1.x86_64.rpm
 ```
 
 **Standalone binary:**
@@ -96,7 +106,7 @@ On Arch / CachyOS there is no `dpkg` or `apt`, so install from the `.deb` payloa
 
 ```bash
 mkdir -p ~/filemon-deb && cd ~/filemon-deb
-ar x FileMon_0.1.1_amd64.deb
+ar x FileMon_0.1.2_amd64.deb
 sudo tar -xzf data.tar.gz -C /
 sudo update-desktop-database /usr/share/applications
 sudo gtk-update-icon-cache /usr/share/icons/hicolor
