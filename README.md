@@ -8,7 +8,23 @@
 
 FileMon is a Windows Explorer-style file manager for Linux, built with [Tauri v2](https://v2.tauri.app/) and Rust. Browse folders, manage files, and preview what is inside — in one window, with no background daemon.
 
-![Icons view — image thumbnails, dark theme](docs/images/screenshot-icons.png)
+## Screenshots
+
+![Details view — folder sizes, color tags, dark theme](docs/images/screenshot-details.png)
+
+*Details view with real folder sizes, color tags in the sidebar, and drive usage in the status bar.*
+
+![Disk Space Analyzer — squarified treemap and ranked breakdown](docs/images/screenshot-analyzer.png)
+
+*Visual Disk Space Analyzer (Ctrl+Shift+U): squarified treemap with per-category colors and hover tooltips, next to a ranked breakdown with usage bars and Reveal / Open in Terminal / Move to Trash.*
+
+![Icons view — real image thumbnails](docs/images/screenshot-icons.png)
+
+*Icon grid with real image thumbnails, cached on disk so a revisited folder does not regenerate them.*
+
+![Dual pane — two independent folders side by side](docs/images/screenshot-dual-pane.png)
+
+*Dual pane (Ctrl+Shift+D): two independent panes, each with its own tabs and folder — copy with F5, move with F6, compare folders between them.*
 
 ## Features
 
@@ -66,9 +82,7 @@ FileMon is a Windows Explorer-style file manager for Linux, built with [Tauri v2
 
 ### Keyboard
 
-Arrows move the selection (a full row in Icons view), Left/Right step one tile, Home/End jump to first/last, PageUp/PageDown move a screen, Enter opens. Hold Shift with any of them to extend the selection as a range. Alt+Left/Right go back/forward, Alt+Up and Backspace go up a level, Ctrl+C/X/V copy/cut/paste, Delete deletes, F2 renames, Ctrl+F focuses search, Ctrl+H toggles hidden files, Ctrl+L focuses the address bar, Ctrl+T opens a tab, Ctrl+W closes it, Ctrl+Shift+T reopens the last closed tab. Space opens Quick Look on the selected file. In dual pane: Ctrl+Shift+D toggles it, Alt+1/Alt+2 switch the active pane, F5 copies the selection to the other pane, F6 moves it. In the icon grid: Ctrl+scroll or Ctrl+= / Ctrl+− changes the tile size.
-
-![Details view — folder sizes, dark theme](docs/images/screenshot-details.png)
+Arrows move the selection (a full row in Icons view), Left/Right step one tile, Home/End jump to first/last, PageUp/PageDown move a screen, Enter opens. Hold Shift with any of them to extend the selection as a range. Alt+Left/Right go back/forward, Alt+Up and Backspace go up a level, Ctrl+C/X/V copy/cut/paste, Delete deletes, F2 renames, Ctrl+F focuses search, Ctrl+H toggles hidden files, Ctrl+L focuses the address bar, Ctrl+T opens a tab, Ctrl+W closes it, Ctrl+Shift+T reopens the last closed tab. Space opens Quick Look on the selected file. Ctrl+Shift+U opens the Disk Space Analyzer, Ctrl+K opens the Command Palette. In dual pane: Ctrl+Shift+D toggles it, Alt+1/Alt+2 switch the active pane, F5 copies the selection to the other pane, F6 moves it. In the icon grid: Ctrl+scroll or Ctrl+= / Ctrl+− changes the tile size.
 
 ## Installation
 
