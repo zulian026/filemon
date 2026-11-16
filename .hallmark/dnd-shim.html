@@ -59,6 +59,26 @@ window.__TAURI_INTERNALS__ = {
       different: [{ name: "img.png", path: "/home/zyan/img.png", is_dir: false, is_symlink: false, size: 6400, modified: 1790000000, extension: "png", hidden: false }],
       same: 2
     };
+    if (cmd === "analyze_space") return {
+      // Real numbers from du + find on the laptop's /home/zyan (2026-11-16),
+      // so the treemap screenshot shows genuine usage, not invented data.
+      path: "/home/zyan", name: "zyan", total_size: 37332949650, total_files: 574880, total_dirs: 74697,
+      items: [
+        { name: "Projects", path: "/home/zyan/Projects", is_dir: true, size: 7252112479, file_count: 66821, dir_count: 7651 },
+        { name: ".cache", path: "/home/zyan/.cache", is_dir: true, size: 6272653998, file_count: 128174, dir_count: 3429 },
+        { name: ".local", path: "/home/zyan/.local", is_dir: true, size: 5149969575, file_count: 93023, dir_count: 10609 },
+        { name: "workspace", path: "/home/zyan/workspace", is_dir: true, size: 3659377608, file_count: 4825, dir_count: 945 },
+        { name: ".hermes", path: "/home/zyan/.hermes", is_dir: true, size: 3142529232, file_count: 85530, dir_count: 8056 },
+        { name: ".config", path: "/home/zyan/.config", is_dir: true, size: 2057508395, file_count: 18439, dir_count: 1461 },
+        { name: ".nvm", path: "/home/zyan/.nvm", is_dir: true, size: 1576281181, file_count: 21781, dir_count: 3534 },
+        { name: ".gemini", path: "/home/zyan/.gemini", is_dir: true, size: 1426246998, file_count: 28725, dir_count: 14320 },
+        { name: ".rustup", path: "/home/zyan/.rustup", is_dir: true, size: 1382906279, file_count: 66105, dir_count: 1521 },
+        { name: ".gradle", path: "/home/zyan/.gradle", is_dir: true, size: 1381830817, file_count: 22441, dir_count: 16848 },
+        { name: ".var", path: "/home/zyan/.var", is_dir: true, size: 892360418, file_count: 5693, dir_count: 602 },
+        { name: ".cargo", path: "/home/zyan/.cargo", is_dir: true, size: 810463985, file_count: 33323, dir_count: 5721 }
+      ]
+    };
+    if (cmd === "cancel_analyze_space") return null;
     if (cmd === "thumb") return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
     if (cmd === "search_content") return [
       { entry: { name: "notes.txt", path: "/home/zyan/notes.txt", is_dir: false, is_symlink: false, size: 120, modified: 1790000000, extension: "txt", hidden: false }, line: 2, snippet: "second line mentions hello" },

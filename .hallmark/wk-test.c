@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
   if (argc > 3) g_eval_file = argv[3];
   gtk_init(&argc, &argv);
   GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-  gtk_window_set_default_size(GTK_WINDOW(win), 800, 600);
+  gtk_window_set_default_size(GTK_WINDOW(win), 1280, 800);
   WebKitWebView *wv = WEBKIT_WEB_VIEW(webkit_web_view_new());
   gtk_container_add(GTK_CONTAINER(win), GTK_WIDGET(wv));
   g_signal_connect(wv, "load-changed", G_CALLBACK(on_load), NULL);
